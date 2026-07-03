@@ -22,6 +22,7 @@ from eit_app.ui.theme import set_button_role, set_hint_text
 
 SIMULATION_INVERSE_METHODS = [
     "noser_rm",
+    "noser_sparse",
     "laplace_rm",
     "curvature_rm",
     "pseudo3d_noser_rm",
@@ -43,6 +44,8 @@ _LEGACY_METHOD_ALIASES = {
     "greit_rm": "greit",
     "greit2d_rm": "greit",
     "greit3d_rm": "greit",
+    "noser_matrix_free": "noser_sparse",
+    "matrix_free_noser": "noser_sparse",
     "pseudo3d": "pseudo3d_noser_rm",
     "pseudo_3d": "pseudo3d_noser_rm",
     "pseudo3d_noser": "pseudo3d_noser_rm",
@@ -51,6 +54,7 @@ _LEGACY_METHOD_ALIASES = {
 _METHOD_TOOLTIP_KEYS = {
     "debug_fine_mesh_noser": "sim.inverse.method.debug_fine_mesh_noser.tooltip",
     "noser_rm": "sim.inverse.method.noser_rm.tooltip",
+    "noser_sparse": "sim.inverse.method.noser_sparse.tooltip",
     "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
     "curvature_rm": "sim.inverse.method.curvature_rm.tooltip",
     "pseudo3d_noser_rm": "sim.inverse.method.pseudo3d_noser_rm.tooltip",

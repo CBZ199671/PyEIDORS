@@ -11,6 +11,8 @@ from typing import Any
 
 from PySide6.QtCore import QSettings
 
+from eit_app.i18n import t
+
 from .models import EidorsEnvironment, InteropCapabilityReport
 
 _SETTINGS_GROUP = "interop_hub"
@@ -117,14 +119,14 @@ def _run_powershell_capture(
 ) -> tuple[int, str, str]:
     binary = _powershell_binary()
     if not binary:
-        return 127, "", "PowerShell 不可用。"
+        return 127, "", t("interop.env.err.powershell_unavailable")
     command = [binary, "-NoProfile", "-Command", script]
     try:
         result = subprocess.run(
             command, capture_output=True, check=False, timeout=timeout
         )
     except subprocess.TimeoutExpired:
-        return 124, "", "PowerShell 调用超时。"
+        return 124, "", t("interop.env.err.powershell_timeout")
     return (
         result.returncode,
         _decode_process_bytes(result.stdout),
@@ -147,7 +149,7 @@ def _run_command_capture(
             command, capture_output=True, check=False, timeout=timeout
         )
     except subprocess.TimeoutExpired:
-        return 124, "", "命令执行超时。"
+        return 124, "", t("interop.env.err.command_timeout")
     except Exception as exc:
         return 127, "", str(exc)
     return (
@@ -159,11 +161,11 @@ def _run_command_capture(
 
 def _runtime_label(runtime_kind: str) -> str:
     labels = {
-        "wsl-bridged": "WSL 桥接",
-        "linux-native": "Linux 原生",
-        "windows-host": "Windows 原生",
+        "wsl-bridged": t("interop.env.runtime.wsl"),
+        "linux-native": t("interop.env.runtime.linux"),
+        "windows-host": t("interop.env.runtime.windows"),
     }
-    return labels.get(runtime_kind, runtime_kind or "未标注")
+    return labels.get(runtime_kind, runtime_kind or t("interop.env.runtime.unknown"))
 
 
 def _guess_host_os_from_path(path: str | Path) -> str:
@@ -719,12 +721,12 @@ def _build_environment_name(
 ) -> str:
     runtime = _runtime_label(runtime_kind)
     if has_matlab and has_startup:
-        return f"{matlab_name} / EIDORS（{runtime}）"
+        return t("interop.env.name.full", matlab=matlab_name, runtime=runtime)
     if has_matlab:
-        return f"{matlab_name}（{runtime}，startup 待确认）"
+        return t("interop.env.name.matlab_only", matlab=matlab_name, runtime=runtime)
     if has_startup:
-        return f"EIDORS startup（{runtime}，MATLAB 待确认）"
-    return f"EIDORS 环境（{runtime}）"
+        return t("interop.env.name.startup_only", runtime=runtime)
+    return t("interop.env.name.generic", runtime=runtime)
 
 
 def _best_matching_startup(anchor: str, startup_items: list[str]) -> str:
@@ -991,64 +993,50 @@ class EidorsEnvironmentDetector:
         )
 
         if windows_candidates.get("matlab") or windows_candidates.get("startups"):
-            report.issues.append(
-                "已扫描 Windows 侧 MATLAB/EIDORS 常见位置，包括所有文件系统盘符上的 Program Files/MATLAB、"
-                "workspace/source/GitHub/Desktop/Downloads 等目录。"
-            )
+            report.issues.append(t("interop.env.issue.scanned_windows"))
         if linux_candidates.get("matlab") or linux_candidates.get("startups"):
-            report.issues.append(
-                "已扫描 Linux/WSL 侧 MATLAB/EIDORS 常见位置，包括 $MATLABROOT、$EIDORS_HOME、"
-                "~/workspace、~/src、/opt、/usr/local 等目录。"
-            )
+            report.issues.append(t("interop.env.issue.scanned_linux"))
         if linux_candidates.get("octave_commands") and not linux_candidates.get(
             "matlab"
         ):
-            report.issues.append(
-                "检测到 Octave，但当前 v1 互通链仍以 MATLAB 为正式运行端；Octave 先作为后续扩展位保留。"
-            )
+            report.issues.append(t("interop.env.issue.octave_only"))
         if "toolbox" in startup_strategies:
-            report.issues.append(
-                "已优先从已检测到的 MATLAB 安装目录下检索 toolbox 中的 EIDORS startup.m。"
-            )
+            report.issues.append(t("interop.env.issue.toolbox_first"))
         if "broadened" in startup_strategies:
-            report.issues.append(
-                "MATLAB 已找到，但 toolbox 内未命中时，已自动扩大到常见工程目录继续搜索 startup.m。"
-            )
+            report.issues.append(t("interop.env.issue.broadened"))
 
         if not report.can_launch_matlab:
-            report.issues.append(
-                "未自动检测到 MATLAB 安装路径，可在 Profiles & Paths 中手动指定。"
-            )
+            report.issues.append(t("interop.env.issue.no_matlab"))
         if not report.has_eidors_startup:
-            report.issues.append(
-                "未自动检测到 EIDORS startup.m，请手动点击 Browse 指定；选择用户脚本后系统也会再尝试按脚本位置自动反推。"
-            )
+            report.issues.append(t("interop.env.issue.no_startup"))
         if detected and not report.can_capture_script:
-            report.issues.append(
-                "已检测到部分环境信息，但还缺少 MATLAB 或 startup.m，需手动补全后才能采集脚本。"
-            )
+            report.issues.append(t("interop.env.issue.incomplete"))
         if not detected:
-            report.issues.append("当前未检测到任何可用候选环境。")
+            report.issues.append(t("interop.env.issue.none"))
 
         return detected, report
 
     def test_matlab_launch(self, environment: EidorsEnvironment) -> tuple[bool, str]:
         if not environment.matlab_command:
-            return False, "尚未配置 MATLAB 可执行文件。"
+            return False, t("interop.env.test.matlab.no_command")
         command = matlab_command_for_execution(environment)
         code, stdout, stderr = _run_command_capture(
             [command, "-batch", "disp('PYEIDORS_MATLAB_OK');"],
             timeout=45,
         )
         if code == 127 and stderr:
-            return False, f"启动 MATLAB 失败: {stderr}"
+            return False, t("interop.env.test.matlab.launch_failed", error=stderr)
         if code != 0:
-            return False, stderr.strip() or stdout.strip() or "MATLAB 返回非零退出码。"
-        return "PYEIDORS_MATLAB_OK" in stdout, stdout.strip() or "MATLAB 已启动。"
+            return False, stderr.strip() or stdout.strip() or t(
+                "interop.env.test.matlab.nonzero"
+            )
+        return "PYEIDORS_MATLAB_OK" in stdout, stdout.strip() or t(
+            "interop.env.test.matlab.ok"
+        )
 
     def test_eidors_startup(self, environment: EidorsEnvironment) -> tuple[bool, str]:
         if not environment.matlab_command or not environment.eidors_startup:
-            return False, "需要同时配置 MATLAB 路径和 EIDORS startup.m。"
+            return False, t("interop.env.test.startup.missing_paths")
         command = matlab_command_for_execution(environment)
         startup = matlab_runtime_path(environment.eidors_startup, environment)
         escaped_startup = startup.replace("'", "''")
@@ -1057,10 +1045,12 @@ class EidorsEnvironmentDetector:
             [command, "-batch", expression], timeout=60
         )
         if code == 127 and stderr:
-            return False, f"EIDORS 启动测试失败: {stderr}"
+            return False, t("interop.env.test.startup.failed", error=stderr)
         if code != 0:
             return (
                 False,
-                stderr.strip() or stdout.strip() or "EIDORS startup 执行失败。",
+                stderr.strip()
+                or stdout.strip()
+                or t("interop.env.test.startup.exec_failed"),
             )
-        return "2" in stdout.split(), stdout.strip() or "EIDORS startup 已运行。"
+        return "2" in stdout.split(), stdout.strip() or t("interop.env.test.startup.ok")

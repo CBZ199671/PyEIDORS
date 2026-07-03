@@ -158,6 +158,49 @@ def test_build_one_step_rm_measurement_diagonal_prior_avoids_dense_param_matrix(
     assert result.metadata["prior_inverse_solver"] == "diagonal"
 
 
+def test_v666_complex_noser_measurement_diagonal_prior_stays_compact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jacobian = np.array(
+        [
+            [1.0 + 0.5j, 2.0 - 0.25j, -0.5 + 0.75j],
+            [3.0 - 1.0j, 0.5 + 0.75j, 1.25 - 0.5j],
+            [0.25 + 2.0j, -1.0 + 0.5j, 0.75 + 0.125j],
+        ],
+        dtype=np.complex64,
+    )
+    lam = 0.13
+    param_rm = rm_module.build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        form="param",
+        dtype="complex64",
+    )
+
+    def _unexpected_dense_prior(*_args, **_kwargs):
+        raise AssertionError("complex diagonal NOSER prior should stay compact")
+
+    monkeypatch.setattr(rm_module, "_prior_to_dense_matrix", _unexpected_dense_prior)
+
+    measurement = rm_module.build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        form="measurement",
+        dtype="complex64",
+        return_metadata=True,
+    )
+
+    assert measurement.rm.dtype == np.dtype(np.complex64)
+    assert measurement.metadata["form"] == "measurement"
+    assert measurement.metadata["inversion_dimension"] == "measurement"
+    assert measurement.metadata["prior_inverse_solver"] == "diagonal"
+    assert measurement.metadata["RtR_kind"] == "diagonal_sparse"
+    assert measurement.metadata["system_shape"] == (3, 3)
+    np.testing.assert_allclose(measurement.rm, param_rm, rtol=5e-5, atol=5e-6)
+
+
 def test_build_one_step_rm_noser_supports_legacy_exponent_one() -> None:
     jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=float)
     lam = 0.1
@@ -350,7 +393,7 @@ def test_build_one_step_rm_measurement_form_matches_param_for_tikhonov() -> None
     assert measurement.metadata["form"] == "measurement"
     assert measurement.metadata["inversion_dimension"] == "measurement"
     assert measurement.metadata["system_shape"] == (2, 2)
-    assert measurement.metadata["prior_inverse_solver"] == "solve"
+    assert measurement.metadata["prior_inverse_solver"] == "diagonal"
 
 
 def test_build_one_step_rm_measurement_form_matches_param_for_noser() -> None:
@@ -403,6 +446,97 @@ def test_build_one_step_rm_measurement_form_matches_param_for_spd_laplace() -> N
     )
 
     np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-7, atol=1e-9)
+
+
+def test_v668_measurement_graph_prior_uses_sparse_ridge_without_dense(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jacobian = np.array(
+        [[1.0, 0.0, 0.25], [0.25, 1.0, -0.5]],
+        dtype=float,
+    )
+    laplace = sparse.csr_matrix(
+        np.array(
+            [
+                [1.0, -1.0, 0.0],
+                [-1.0, 2.0, -1.0],
+                [0.0, -1.0, 1.0],
+            ],
+            dtype=float,
+        )
+    )
+    lam = 0.2
+
+    def _unexpected_dense_prior(*_args, **_kwargs):
+        raise AssertionError("measurement graph prior should stay sparse")
+
+    monkeypatch.setattr(rm_module, "_prior_to_dense_matrix", _unexpected_dense_prior)
+
+    result = rm_module.build_one_step_rm(
+        jacobian,
+        regularization=laplace,
+        lambda_=lam,
+        mode="laplace",
+        form="measurement",
+        return_metadata=True,
+    )
+
+    ridge = float(result.metadata["measurement_prior_ridge"])
+    shifted = laplace + sparse.eye(laplace.shape[0], format="csr") * ridge
+    expected = np.linalg.solve(
+        jacobian.T @ jacobian + lam**2 * shifted.toarray(),
+        jacobian.T,
+    )
+
+    assert ridge > 0.0
+    assert result.metadata["measurement_prior_ridge_source"] == "auto"
+    assert result.metadata["prior_inverse_solver"] == "sparse_lu_ridge"
+    assert result.metadata["system_shape"] == (2, 2)
+    np.testing.assert_allclose(result.rm, expected, rtol=1e-7, atol=1e-9)
+
+
+def test_v668_measurement_sparse_graph_prior_supports_complex_jacobian() -> None:
+    jacobian = np.array(
+        [
+            [1.0 + 0.5j, 0.0, 0.25 - 0.125j],
+            [0.25, 1.0 - 0.25j, -0.5 + 0.75j],
+        ],
+        dtype=np.complex64,
+    )
+    laplace = sparse.csr_matrix(
+        np.array(
+            [
+                [1.0, -1.0, 0.0],
+                [-1.0, 2.0, -1.0],
+                [0.0, -1.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+    )
+    lam = 0.2
+
+    result = build_one_step_rm(
+        jacobian,
+        regularization=laplace,
+        lambda_=lam,
+        mode="laplace",
+        form="measurement",
+        dtype="complex64",
+        return_metadata=True,
+    )
+
+    ridge = float(result.metadata["measurement_prior_ridge"])
+    shifted = (
+        laplace.toarray().astype(np.complex64) + np.eye(3, dtype=np.complex64) * ridge
+    )
+    expected = np.linalg.solve(
+        jacobian.conj().T @ jacobian + lam**2 * shifted,
+        jacobian.conj().T,
+    )
+
+    assert result.rm.dtype == np.dtype(np.complex64)
+    assert result.metadata["prior_inverse_solver"] == "sparse_lu_ridge"
+    np.testing.assert_allclose(result.rm, expected, rtol=5e-5, atol=5e-6)
 
 
 def test_build_one_step_rm_measurement_form_matches_param_for_curvature() -> None:

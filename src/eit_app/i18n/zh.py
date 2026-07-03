@@ -480,7 +480,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.artifact_weight_tooltip": "GREIT \u6743\u91cd\u5b58\u5728 HDF5 artifact \u4e2d\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\u3002",  # GREIT 权重存在 HDF5 artifact 中；该值不作为 α 使用。
     "sim.inverse.artifact_nf1_tooltip": "GREIT \u4f7f\u7528 EIDORS NF=1 \u81ea\u52a8\u641c\u7d22 weight\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\uff0c\u51b7\u6784\u5efa\u4f1a\u66f4\u6162\u3002",  # GREIT 使用 EIDORS NF=1 自动搜索 weight；该值不作为 α 使用，冷构建会更慢。
     "sim.inverse.greit.group_title": "GREIT \u9ad8\u7ea7\u53c2\u6570",  # GREIT 高级参数
-    "sim.inverse.greit.desired_label": "desired image\uff1a",  # desired image：
+    "sim.inverse.greit.desired_label": "\u76ee\u6807\u56fe\u50cf\uff1a",  # 目标图像：
     "sim.inverse.greit.desired.center": "\u4e2d\u5fc3\u91c7\u6837",  # 中心采样
     "sim.inverse.greit.desired.gauss": "\u9ad8\u65af\u79ef\u5206",  # 高斯积分
     "sim.inverse.greit.desired.adaptive_gauss": "\u81ea\u9002\u5e94\u79ef\u5206",  # 自适应积分
@@ -493,7 +493,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.greit.weight_strategy.fixed": "\u56fa\u5b9a weight",  # 固定 weight
     "sim.inverse.greit.weight_strategy.eidors_nf1": "EIDORS NF=1 \u81ea\u52a8\u641c\u7d22",  # EIDORS NF=1 自动搜索
     "sim.inverse.greit.weight_strategy_tooltip": "\u56fa\u5b9a weight \u76f4\u63a5\u4f7f\u7528\u4e0b\u65b9\u6570\u503c\uff1bEIDORS NF=1 \u4f1a\u5728\u51b7\u6784\u5efa RM \u65f6\u641c\u7d22 weight\uff0c\u4f7f\u566a\u58f0\u56fe\u6307\u6807\u63a5\u8fd1 1\u3002",  # 固定 weight 直接使用下方数值；EIDORS NF=1 会在冷构建 RM 时搜索 weight，使噪声图指标接近 1。
-    "sim.inverse.greit.weight_label": "weight / NF\uff1a",  # weight / NF：
+    "sim.inverse.greit.weight_label": "\u6743\u91cd / NF\uff1a",  # 权重 / NF：
     "sim.inverse.greit.weight_tooltip": "\u7528\u4e8e GREIT RM \u8bad\u7ec3\u7684\u6743\u91cd/\u6b63\u5219\u5f3a\u5ea6\uff1b\u6539\u53d8\u5b83\u4f1a\u9009\u62e9\u6216\u6784\u5efa\u53e6\u4e00\u4e2a artifact\u3002",  # 用于 GREIT RM 训练的权重/正则强度；改变它会选择或构建另一个 artifact。
     "sim.inverse.greit.use_cache_check": "\u4f7f\u7528\u7f13\u5b58 RM",  # 使用缓存 RM
     "sim.inverse.greit.cache_tooltip": "\u52fe\u9009\u65f6\u4f18\u5148\u590d\u7528\u7b7e\u540d\u5b8c\u5168\u4e00\u81f4\u7684 GREIT RM artifact\u3002",  # 勾选时优先复用签名完全一致的 GREIT RM artifact。
@@ -507,6 +507,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.status_reconstructing": "\u91cd\u6784\u4e2d\u2026",  # 重构中…
     "sim.inverse.method.debug_fine_mesh_noser.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u5728\u5f53\u524d\u7ec6\u7f51\u683c\u4e0a\u51b7\u6784\u5efa dense NOSER \u4e0a\u4e0b\u6587\uff0c\u6bd4 v1 RM \u70ed\u8def\u5f84\u66f4\u6162\u4e14\u66f4\u6613\u788e\u7247\u5316\u3002",  # 调试基线：在当前细网格上冷构建 dense NOSER 上下文，比 v1 RM 热路径更慢且更易碎片化。
     "sim.inverse.method.noser_rm.tooltip": "NOSER RM \u9ed8\u8ba4\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 \u7c97\u9006\u6a21\u578b artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # NOSER RM 默认路由：冷构建或复用 HDF5 粗逆模型 artifact，然后用 RM @ dv 热路径重构。
+    "sim.inverse.method.noser_sparse.tooltip": "NOSER \u7a00\u758f\u8def\u7531\uff1a\u4f7f\u7528\u7ebf\u6027\u5316/\u77e9\u9635\u81ea\u7531\u7b97\u5b50\u6c42\u89e3\u5355\u6b65 3D \u5dee\u5206\u9006\u95ee\u9898\uff0c\u4e0d\u751f\u6210 RM artifact\u3002",  # NOSER 稀疏路线：使用线性化/矩阵自由算子求解单步 3D 差分逆问题，不生成 RM artifact。
     "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-Laplacian artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Laplace RM 平滑路由：冷构建或复用 HDF5 graph-Laplacian artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.curvature_rm.tooltip": "Curvature RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-LtL artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Curvature RM 平滑路由：冷构建或复用 HDF5 graph-LtL artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.pseudo3d_noser_rm.tooltip": "\u4f2a\u4e09\u7ef4\u8def\u7531\uff1a\u5148\u5c06\u7535\u6781\u5e03\u5c40\u6298\u53e0\u4e3a 2D NOSER RM \u5dee\u5206\u91cd\u6784\uff0c\u518d\u628a 2D \u7535\u5bfc\u7387\u56fe\u6324\u51fa\u4e3a 3D \u56db\u9762\u4f53\u663e\u793a\u7f51\u683c\uff1b\u5b83\u4e0d\u662f\u771f\u6b63\u7684 3D CEM \u9006\u95ee\u9898\u6c42\u89e3\u3002",  # 伪三维路线：先将电极布局折叠为 2D NOSER RM 差分重构，再把 2D 电导率图挤出为 3D 四面体显示网格；它不是真正的 3D CEM 逆问题求解。
@@ -1034,4 +1035,78 @@ TRANSLATIONS: dict[str, str] = {
     "path_picker.label.accept": "\u9009\u62e9",  # 选择
     "path_picker.label.reject": "\u53d6\u6d88",  # 取消
     "path_picker.button.choose_current_folder": "\u9009\u62e9\u5f53\u524d\u6587\u4ef6\u5939",  # 选择当前文件夹
+    # ==================================================================
+    # Runtime backend messages (preflight / interop / diagnostics)
+    # i18n-fix: relocated from hardcoded literals in backend modules
+    # ==================================================================
+    "preflight.skipped": "\u5df2\u8df3\u8fc7\u8fde\u63a5\u524d\u9884\u68c0\u3002",  # 已跳过连接前预检。
+    "preflight.serial.no_port.summary": "\u672a\u9009\u62e9\u4e32\u53e3\u3002",  # 未选择串口。
+    "preflight.serial.no_port.hint": "\u8bf7\u5148\u70b9\u51fb Scan\uff0c\u6216\u4ece\u4e0b\u62c9\u6846\u9009\u62e9\u81ea\u52a8\u68c0\u6d4b\u5230\u7684\u4e32\u53e3\u3002",  # 请先点击 Scan，或从下拉框选择自动检测到的串口。
+    "preflight.serial.win_absent.summary": "Windows \u5f53\u524d\u672a\u68c0\u6d4b\u5230\u4e32\u53e3 {name}\u3002",  # Windows 当前未检测到串口 {name}。
+    "preflight.serial.win_absent.hint": "\u8bf7\u786e\u8ba4\u8bbe\u5907\u4ecd\u7136\u63d2\u7740\uff0c\u5fc5\u8981\u65f6\u91cd\u65b0\u63d2\u62d4 USB \u540e\u70b9\u51fb Scan\uff1b\u5982\u679c\u4f60\u521a\u5173\u95ed\u8f6f\u4ef6\uff0c\u8bf7\u7b49\u5f85 1-2 \u79d2\u518d\u91cd\u8bd5\u3002",  # 请确认设备仍然插着，必要时重新插拔 USB 后点击 Scan；如果你刚关闭软件，请等待 1-2 秒再重试。
+    "preflight.serial.win_present.summary": "\u5df2\u68c0\u6d4b\u5230 Windows \u4e32\u53e3 {name}\u3002",  # 已检测到 Windows 串口 {name}。
+    "preflight.serial.win_present.hint": "\u5df2\u68c0\u6d4b\u5230 {name}\uff0c\u8fde\u63a5\u65f6\u4f1a\u81ea\u52a8\u901a\u8fc7 Windows \u4e3b\u673a\u4e32\u53e3\u6865\u63a5\u6253\u5f00\uff1b\u5982\u679c\u521a\u5173\u95ed\u8f6f\u4ef6\uff0c\u7a0b\u5e8f\u4e5f\u4f1a\u81ea\u52a8\u505a\u77ed\u6682\u91cd\u8bd5\u3002",  # 已检测到 {name}，连接时会自动通过 Windows 主机串口桥接打开；如果刚关闭软件，程序也会自动做短暂重试。
+    "preflight.serial.dev_missing.summary": "\u672a\u627e\u5230\u4e32\u53e3\u8bbe\u5907 {port}\u3002",  # 未找到串口设备 {port}。
+    "preflight.serial.dev_missing.hint": "\u8bf7\u68c0\u67e5 USB \u7ebf\u548c\u8bbe\u5907\u4f9b\u7535\uff1b\u5982\u679c\u8f6f\u4ef6\u8fd0\u884c\u5728 WSL \u4e2d\uff0c\u4f18\u5148\u4ece\u4e0b\u62c9\u6846\u9009\u62e9\u81ea\u52a8\u68c0\u6d4b\u5230\u7684 Windows COM \u53e3\u3002",  # 请检查 USB 线和设备供电；如果软件运行在 WSL 中，优先从下拉框选择自动检测到的 Windows COM 口。
+    "preflight.serial.cannot_open.summary": "\u4e32\u53e3 {name} \u5f53\u524d\u65e0\u6cd5\u6253\u5f00\u3002",  # 串口 {name} 当前无法打开。
+    "preflight.serial.ok.summary": "\u5df2\u786e\u8ba4\u4e32\u53e3 {name} \u53ef\u6253\u5f00\u3002",  # 已确认串口 {name} 可打开。
+    "preflight.serial.ok.hint": "\u5df2\u68c0\u6d4b\u5230 {name}\uff0c\u4e32\u53e3\u9884\u68c0\u901a\u8fc7\uff0c\u6b63\u5728\u7ee7\u7eed\u9a8c\u8bc1\u8bbe\u5907\u534f\u8bae\u3002",  # 已检测到 {name}，串口预检通过，正在继续验证设备协议。
+    "preflight.serial.fail.denied": "{port} \u8bbf\u95ee\u88ab\u62d2\u7edd\uff0c\u53ef\u80fd\u5df2\u88ab\u5176\u4ed6\u7a0b\u5e8f\u5360\u7528\u3002\u8bf7\u5173\u95ed\u5360\u7528\u8fdb\u7a0b\u540e\u91cd\u8bd5\u3002",  # {port} 访问被拒绝，可能已被其他程序占用。请关闭占用进程后重试。
+    "preflight.serial.fail.missing": "{port} \u5f53\u524d\u4e0d\u5b58\u5728\u6216\u672a\u5c31\u7eea\u3002\u8bf7\u68c0\u67e5 USB \u8fde\u63a5\u5e76\u91cd\u65b0 Scan\u3002",  # {port} 当前不存在或未就绪。请检查 USB 连接并重新 Scan。
+    "preflight.serial.fail.unconfigurable": "{port} \u5f53\u524d\u4e0d\u53ef\u914d\u7f6e\u3002\u82e5\u4f60\u5728 WSL \u4e2d\u8fd0\u884c\uff0c\u8bf7\u4e0d\u8981\u624b\u52a8\u586b\u5199 /dev/ttyS*\uff0c\u4f18\u5148\u9009\u62e9\u81ea\u52a8\u68c0\u6d4b\u5230\u7684 Windows COM \u53e3\u3002",  # {port} 当前不可配置。若你在 WSL 中运行，请不要手动填写 /dev/ttyS*，优先选择自动检测到的 Windows COM 口。
+    "preflight.serial.fail.generic": "{port} \u5f53\u524d\u65e0\u6cd5\u6253\u5f00\u3002\u8bf7\u786e\u8ba4\u4e32\u53e3\u53f7\u3001\u9a71\u52a8\u548c\u6ce2\u7279\u7387\u8bbe\u7f6e\u65e0\u8bef\u3002",  # {port} 当前无法打开。请确认串口号、驱动和波特率设置无误。
+    "preflight.relay.no_host.summary": "4G Relay \u670d\u52a1\u5668\u5730\u5740\u4e3a\u7a7a\u3002",  # 4G Relay 服务器地址为空。
+    "preflight.relay.no_host.hint": "\u8bf7\u5148\u586b\u5199\u53ef\u8bbf\u95ee\u7684\u670d\u52a1\u5668 host\uff0c\u518d\u53d1\u8d77\u8fde\u63a5\u3002",  # 请先填写可访问的服务器 host，再发起连接。
+    "preflight.relay.fail.summary": "\u65e0\u6cd5\u8fde\u63a5\u5230 4G Relay \u670d\u52a1\u5668 {host}:{port}\u3002",  # 无法连接到 4G Relay 服务器 {host}:{port}。
+    "preflight.relay.ok.summary": "\u5df2\u8fde\u901a 4G Relay \u670d\u52a1\u5668 {host}:{port}\u3002",  # 已连通 4G Relay 服务器 {host}:{port}。
+    "preflight.relay.ok.hint": "\u670d\u52a1\u5668 {host}:{port} \u53ef\u8fbe\uff0c\u63a5\u4e0b\u6765\u4f1a\u7ee7\u7eed\u9a8c\u8bc1\u8bbe\u5907\u63e1\u624b\u548c\u94fe\u8def\u80fd\u529b\u3002",  # 服务器 {host}:{port} 可达，接下来会继续验证设备握手和链路能力。
+    "preflight.relay.fail.refused": "{host}:{port} \u62d2\u7edd\u8fde\u63a5\u3002\u8bf7\u786e\u8ba4 relay \u670d\u52a1\u5df2\u542f\u52a8\uff0c\u5e76\u68c0\u67e5 host/port \u662f\u5426\u586b\u5199\u6b63\u786e\u3002",  # {host}:{port} 拒绝连接。请确认 relay 服务已启动，并检查 host/port 是否填写正确。
+    "preflight.relay.fail.timeout": "\u8fde\u63a5 {host}:{port} \u8d85\u65f6\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u670d\u52a1\u5668\u5730\u5740\u548c\u76ee\u6807\u8bbe\u5907\u662f\u5426\u5728\u7ebf\u3002",  # 连接 {host}:{port} 超时。请检查网络、服务器地址和目标设备是否在线。
+    "preflight.relay.fail.dns": "\u65e0\u6cd5\u89e3\u6790\u670d\u52a1\u5668\u5730\u5740 {host}\u3002\u8bf7\u68c0\u67e5 host \u62fc\u5199\u6216 DNS \u914d\u7f6e\u3002",  # 无法解析服务器地址 {host}。请检查 host 拼写或 DNS 配置。
+    "preflight.relay.fail.generic": "{host}:{port} \u5f53\u524d\u4e0d\u53ef\u8fbe\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u670d\u52a1\u72b6\u6001\u548c\u9632\u706b\u5899\u8bbe\u7f6e\u3002",  # {host}:{port} 当前不可达。请检查网络、服务状态和防火墙设置。
+    "interop.env.runtime.wsl": "WSL \u6865\u63a5",  # WSL 桥接
+    "interop.env.runtime.linux": "Linux \u539f\u751f",  # Linux 原生
+    "interop.env.runtime.windows": "Windows \u539f\u751f",  # Windows 原生
+    "interop.env.runtime.unknown": "\u672a\u6807\u6ce8",  # 未标注
+    "interop.env.name.full": "{matlab} / EIDORS\uff08{runtime}\uff09",  # {matlab} / EIDORS（{runtime}）
+    "interop.env.name.matlab_only": "{matlab}\uff08{runtime}\uff0cstartup \u5f85\u786e\u8ba4\uff09",  # {matlab}（{runtime}，startup 待确认）
+    "interop.env.name.startup_only": "EIDORS startup\uff08{runtime}\uff0cMATLAB \u5f85\u786e\u8ba4\uff09",  # EIDORS startup（{runtime}，MATLAB 待确认）
+    "interop.env.name.generic": "EIDORS \u73af\u5883\uff08{runtime}\uff09",  # EIDORS 环境（{runtime}）
+    "interop.env.err.powershell_unavailable": "PowerShell \u4e0d\u53ef\u7528\u3002",  # PowerShell 不可用。
+    "interop.env.err.powershell_timeout": "PowerShell \u8c03\u7528\u8d85\u65f6\u3002",  # PowerShell 调用超时。
+    "interop.env.err.command_timeout": "\u547d\u4ee4\u6267\u884c\u8d85\u65f6\u3002",  # 命令执行超时。
+    "interop.env.issue.scanned_windows": "\u5df2\u626b\u63cf Windows \u4fa7 MATLAB/EIDORS \u5e38\u89c1\u4f4d\u7f6e\uff0c\u5305\u62ec\u6240\u6709\u6587\u4ef6\u7cfb\u7edf\u76d8\u7b26\u4e0a\u7684 Program Files/MATLAB\u3001workspace/source/GitHub/Desktop/Downloads \u7b49\u76ee\u5f55\u3002",  # 已扫描 Windows 侧 MATLAB/EIDORS 常见位置，包括所有文件系统盘符上的 Program Files/MATLAB、workspace/source/GitHub/Desktop/Downloads 等目录。
+    "interop.env.issue.scanned_linux": "\u5df2\u626b\u63cf Linux/WSL \u4fa7 MATLAB/EIDORS \u5e38\u89c1\u4f4d\u7f6e\uff0c\u5305\u62ec $MATLABROOT\u3001$EIDORS_HOME\u3001~/workspace\u3001~/src\u3001/opt\u3001/usr/local \u7b49\u76ee\u5f55\u3002",  # 已扫描 Linux/WSL 侧 MATLAB/EIDORS 常见位置，包括 $MATLABROOT、$EIDORS_HOME、~/workspace、~/src、/opt、/usr/local 等目录。
+    "interop.env.issue.octave_only": "\u68c0\u6d4b\u5230 Octave\uff0c\u4f46\u5f53\u524d v1 \u4e92\u901a\u94fe\u4ecd\u4ee5 MATLAB \u4e3a\u6b63\u5f0f\u8fd0\u884c\u7aef\uff1bOctave \u5148\u4f5c\u4e3a\u540e\u7eed\u6269\u5c55\u4f4d\u4fdd\u7559\u3002",  # 检测到 Octave，但当前 v1 互通链仍以 MATLAB 为正式运行端；Octave 先作为后续扩展位保留。
+    "interop.env.issue.toolbox_first": "\u5df2\u4f18\u5148\u4ece\u5df2\u68c0\u6d4b\u5230\u7684 MATLAB \u5b89\u88c5\u76ee\u5f55\u4e0b\u68c0\u7d22 toolbox \u4e2d\u7684 EIDORS startup.m\u3002",  # 已优先从已检测到的 MATLAB 安装目录下检索 toolbox 中的 EIDORS startup.m。
+    "interop.env.issue.broadened": "MATLAB \u5df2\u627e\u5230\uff0c\u4f46 toolbox \u5185\u672a\u547d\u4e2d\u65f6\uff0c\u5df2\u81ea\u52a8\u6269\u5927\u5230\u5e38\u89c1\u5de5\u7a0b\u76ee\u5f55\u7ee7\u7eed\u641c\u7d22 startup.m\u3002",  # MATLAB 已找到，但 toolbox 内未命中时，已自动扩大到常见工程目录继续搜索 startup.m。
+    "interop.env.issue.no_matlab": "\u672a\u81ea\u52a8\u68c0\u6d4b\u5230 MATLAB \u5b89\u88c5\u8def\u5f84\uff0c\u53ef\u5728 Profiles & Paths \u4e2d\u624b\u52a8\u6307\u5b9a\u3002",  # 未自动检测到 MATLAB 安装路径，可在 Profiles & Paths 中手动指定。
+    "interop.env.issue.no_startup": "\u672a\u81ea\u52a8\u68c0\u6d4b\u5230 EIDORS startup.m\uff0c\u8bf7\u624b\u52a8\u70b9\u51fb Browse \u6307\u5b9a\uff1b\u9009\u62e9\u7528\u6237\u811a\u672c\u540e\u7cfb\u7edf\u4e5f\u4f1a\u518d\u5c1d\u8bd5\u6309\u811a\u672c\u4f4d\u7f6e\u81ea\u52a8\u53cd\u63a8\u3002",  # 未自动检测到 EIDORS startup.m，请手动点击 Browse 指定；选择用户脚本后系统也会再尝试按脚本位置自动反推。
+    "interop.env.issue.incomplete": "\u5df2\u68c0\u6d4b\u5230\u90e8\u5206\u73af\u5883\u4fe1\u606f\uff0c\u4f46\u8fd8\u7f3a\u5c11 MATLAB \u6216 startup.m\uff0c\u9700\u624b\u52a8\u8865\u5168\u540e\u624d\u80fd\u91c7\u96c6\u811a\u672c\u3002",  # 已检测到部分环境信息，但还缺少 MATLAB 或 startup.m，需手动补全后才能采集脚本。
+    "interop.env.issue.none": "\u5f53\u524d\u672a\u68c0\u6d4b\u5230\u4efb\u4f55\u53ef\u7528\u5019\u9009\u73af\u5883\u3002",  # 当前未检测到任何可用候选环境。
+    "interop.env.test.matlab.no_command": "\u5c1a\u672a\u914d\u7f6e MATLAB \u53ef\u6267\u884c\u6587\u4ef6\u3002",  # 尚未配置 MATLAB 可执行文件。
+    "interop.env.test.matlab.launch_failed": "\u542f\u52a8 MATLAB \u5931\u8d25: {error}",  # 启动 MATLAB 失败: {error}
+    "interop.env.test.matlab.nonzero": "MATLAB \u8fd4\u56de\u975e\u96f6\u9000\u51fa\u7801\u3002",  # MATLAB 返回非零退出码。
+    "interop.env.test.matlab.ok": "MATLAB \u5df2\u542f\u52a8\u3002",  # MATLAB 已启动。
+    "interop.env.test.startup.missing_paths": "\u9700\u8981\u540c\u65f6\u914d\u7f6e MATLAB \u8def\u5f84\u548c EIDORS startup.m\u3002",  # 需要同时配置 MATLAB 路径和 EIDORS startup.m。
+    "interop.env.test.startup.failed": "EIDORS \u542f\u52a8\u6d4b\u8bd5\u5931\u8d25: {error}",  # EIDORS 启动测试失败: {error}
+    "interop.env.test.startup.exec_failed": "EIDORS startup \u6267\u884c\u5931\u8d25\u3002",  # EIDORS startup 执行失败。
+    "interop.env.test.startup.ok": "EIDORS startup \u5df2\u8fd0\u884c\u3002",  # EIDORS startup 已运行。
+    "interop.svc.err.boundary_uninterpretable": "\u8fb9\u754c\u7535\u538b\u6570\u636e\u5df2\u627e\u5230\uff0c\u4f46\u5f53\u524d\u65e0\u6cd5\u76f4\u63a5\u6309\u914d\u7f6e\u89e3\u91ca\uff1a{error}",  # 边界电压数据已找到，但当前无法直接按配置解释：{error}
+    "interop.svc.err.exporter_mesh_only": "\u5f53\u524d\u5bfc\u51fa\u5668\u53ea\u652f\u6301\u4e09\u89d2\u5f62 2D \u7f51\u683c\u6216\u56db\u9762\u4f53 3D \u7f51\u683c\u3002",  # 当前导出器只支持三角形 2D 网格或四面体 3D 网格。
+    "interop.svc.err.need_2d_coords": "\u81f3\u5c11\u9700\u8981\u4e8c\u7ef4\u8282\u70b9\u5750\u6807\u624d\u80fd\u63a8\u65ad\u7535\u6781\u8282\u70b9\u3002",  # 至少需要二维节点坐标才能推断电极节点。
+    "interop.svc.err.no_boundary_nodes": "\u65e0\u6cd5\u4ece\u51e0\u4f55\u4e2d\u63a8\u65ad\u8fb9\u754c\u8282\u70b9\u3002",  # 无法从几何中推断边界节点。
+    "interop.svc.err.no_matlab": "\u5c1a\u672a\u914d\u7f6e MATLAB \u53ef\u6267\u884c\u8def\u5f84\u3002",  # 尚未配置 MATLAB 可执行路径。
+    "interop.svc.err.no_startup": "\u5c1a\u672a\u914d\u7f6e EIDORS startup.m\u3002",  # 尚未配置 EIDORS startup.m。
+    "interop.svc.note.capture_report": "\u5df2\u751f\u6210 capture_report.json\uff0c\u53ef\u5728 Diagnostics \u4e2d\u67e5\u770b\u539f\u59cb\u91c7\u96c6\u7ed3\u679c\u3002",  # 已生成 capture_report.json，可在 Diagnostics 中查看原始采集结果。
+    "interop.svc.err.need_env_for_script": "\u91c7\u96c6 EIDORS \u811a\u672c\u524d\u9700\u8981\u5148\u9009\u62e9\u4e00\u4e2a MATLAB/EIDORS \u73af\u5883\u3002",  # 采集 EIDORS 脚本前需要先选择一个 MATLAB/EIDORS 环境。
+    "interop.svc.err.unsupported_source": "\u5f53\u524d\u4ec5\u652f\u6301\u5bfc\u5165 bridge \u76ee\u5f55\u3001legacy .mat \u6587\u4ef6\u6216 EIDORS .m \u811a\u672c\u3002",  # 当前仅支持导入 bridge 目录、legacy .mat 文件或 EIDORS .m 脚本。
+    "interop.svc.note.no_geometry_export": "\u672c\u6b21\u5bfc\u51fa\u672a\u5305\u542b geometry.mat\uff1b\u5f53\u524d\u6765\u6e90\u5c1a\u672a\u63d0\u4f9b\u53ef\u590d\u7528\u7684\u51e0\u4f55\u8f7d\u8377\u3002",  # 本次导出未包含 geometry.mat；当前来源尚未提供可复用的几何载荷。
+    "interop.svc.note.no_measurements_export": "\u672c\u6b21\u5bfc\u51fa\u672a\u5305\u542b\u8fb9\u754c\u7535\u538b\u6570\u636e\uff1b\u5f53\u524d\u6765\u6e90\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u6d4b\u91cf\u6570\u7ec4\u3002",  # 本次导出未包含边界电压数据；当前来源没有可导出的测量数组。
+    "interop.svc.err.smoke_needs_two": "\u5192\u70df\u9a8c\u8bc1\u9700\u8981 homogeneous \u4e0e target \u4e24\u7ec4\u8fb9\u754c\u7535\u538b\u3002",  # 冒烟验证需要 homogeneous 与 target 两组边界电压。
+    "interop.svc.smoke.compat_ok": "\u6570\u636e\u517c\u5bb9\u6027\u68c0\u67e5\u901a\u8fc7\uff1a{count} \u4e2a\u8fb9\u754c\u7535\u538b\u70b9\u53ef\u6309\u5f53\u524d\u5e03\u5c40\u89e3\u91ca\u3002",  # 数据兼容性检查通过：{count} 个边界电压点可按当前布局解释。
+    "interop.svc.smoke.compat_3d_suffix": " \u5f53\u524d\u4e3a 3D \u914d\u7f6e\uff0c\u81ea\u52a8\u70df\u6d4b\u9ed8\u8ba4\u8df3\u8fc7 full inverse\uff0c\u53ea\u5b8c\u6210\u8f93\u5165\u517c\u5bb9\u6027\u9a8c\u8bc1\u3002",  #  当前为 3D 配置，自动烟测默认跳过 full inverse，只完成输入兼容性验证。
+    "interop.svc.smoke.inverse_ok": "\u9006\u95ee\u9898\u70df\u6d4b\u901a\u8fc7\uff1a{count} \u70b9\u8fb9\u754c\u7535\u538b\u5df2\u6210\u529f\u8dd1\u901a {method}\uff0c\u5f97\u5230 {n_elements} \u4e2a\u5355\u5143\u7684\u91cd\u6784\u7ed3\u679c\u3002",  # 逆问题烟测通过：{count} 点边界电压已成功跑通 {method}，得到 {n_elements} 个单元的重构结果。
+    "diag.amgx_unavailable_spd_gamg": "AmgX \u4e0d\u53ef\u7528\u65f6\u4f7f\u7528 spd_gamg CUDA",  # AmgX 不可用时使用 spd_gamg CUDA
+    "dlg.interop.status.bridge_label": "Bridge \u5305",  # Bridge 包
 }

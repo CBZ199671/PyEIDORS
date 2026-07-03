@@ -1033,7 +1033,9 @@ class InteropHubDialog(QDialog):
         self._status_title_labels["matlab"].setText("MATLAB")
         self._status_title_labels["startup"].setText("EIDORS startup")
         self._status_title_labels["source"].setText(t("dlg.interop.source.label"))
-        self._status_title_labels["bridge_package"].setText("Bridge package")
+        self._status_title_labels["bridge_package"].setText(
+            t("dlg.interop.status.bridge_label")
+        )
         self._refresh_status_labels()
 
         # Import tab — step 1 environment

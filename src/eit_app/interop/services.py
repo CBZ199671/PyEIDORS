@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 from scipy.io import loadmat
 
+from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 from pyeidors.data.measurement_dataset import MeasurementDataset
 from pyeidors.interop import STANDARD_INTEROP_FORMAT
@@ -219,7 +220,7 @@ def _build_preview(loaded: LoadedBridgePackage) -> EidorsImportPreview:
             capability.can_import_measurements = True
         except Exception as exc:
             capability.can_import_measurements = False
-            warnings.append(f"边界电压数据已找到，但当前无法直接按配置解释：{exc}")
+            warnings.append(t("interop.svc.err.boundary_uninterpretable", error=exc))
 
     return EidorsImportPreview(
         forward_model_config=forward_cfg,
@@ -244,7 +245,7 @@ def _boundary_entities_from_cells(cell_connectivity: np.ndarray) -> np.ndarray:
     elif verts_per_cell == 4:
         local_facets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
     else:
-        raise ValueError("当前导出器只支持三角形 2D 网格或四面体 3D 网格。")
+        raise ValueError(t("interop.svc.err.exporter_mesh_only"))
 
     counts: dict[tuple[int, ...], tuple[int, ...]] = {}
     repeats: dict[tuple[int, ...], int] = {}
@@ -265,11 +266,11 @@ def _infer_electrode_node_groups(
     node_coords: np.ndarray, boundary_entities: np.ndarray, n_elec: int
 ) -> tuple[np.ndarray, np.ndarray]:
     if node_coords.shape[1] < 2:
-        raise ValueError("至少需要二维节点坐标才能推断电极节点。")
+        raise ValueError(t("interop.svc.err.need_2d_coords"))
 
     boundary_nodes = np.unique(np.asarray(boundary_entities, dtype=int).reshape(-1)) - 1
     if boundary_nodes.size == 0:
-        raise ValueError("无法从几何中推断边界节点。")
+        raise ValueError(t("interop.svc.err.no_boundary_nodes"))
 
     coords = node_coords[boundary_nodes, :2]
     center = coords.mean(axis=0)
@@ -352,9 +353,9 @@ class EidorsBridgeRunner:
         output_dir: str | Path,
     ) -> Path:
         if not environment.matlab_command:
-            raise RuntimeError("尚未配置 MATLAB 可执行路径。")
+            raise RuntimeError(t("interop.svc.err.no_matlab"))
         if not environment.eidors_startup:
-            raise RuntimeError("尚未配置 EIDORS startup.m。")
+            raise RuntimeError(t("interop.svc.err.no_startup"))
 
         source = Path(script_path)
         root = Path(output_dir)
@@ -414,9 +415,7 @@ class EidorsBridgeRunner:
         notes: list[str] = []
         report_path = root / CAPTURE_REPORT_NAME
         if report_path.exists():
-            notes.append(
-                "已生成 capture_report.json，可在 Diagnostics 中查看原始采集结果。"
-            )
+            notes.append(t("interop.svc.note.capture_report"))
         manifest = default_manifest(
             source_framework="eidors",
             package_kind="captured_script",
@@ -493,9 +492,7 @@ class EidorsScriptCaptureService:
             return load_bridge_package(source)
         if source.is_file() and source.suffix.lower() == ".m":
             if environment is None:
-                raise RuntimeError(
-                    "采集 EIDORS 脚本前需要先选择一个 MATLAB/EIDORS 环境。"
-                )
+                raise RuntimeError(t("interop.svc.err.need_env_for_script"))
             target_dir = (
                 Path(to_posix_path(output_dir))
                 if output_dir
@@ -503,9 +500,7 @@ class EidorsScriptCaptureService:
             )
             bundle_dir = self._runner.run_capture(environment, source, target_dir)
             return load_bridge_package(bundle_dir)
-        raise RuntimeError(
-            "当前仅支持导入 bridge 目录、legacy .mat 文件或 EIDORS .m 脚本。"
-        )
+        raise RuntimeError(t("interop.svc.err.unsupported_source"))
 
 
 class InteropBundleImporter:
@@ -547,13 +542,9 @@ class InteropBundleExporter:
         effective_measurements = measurements if job.include_measurements else None
         effective_notes = list(notes or [])
         if job.include_geometry and effective_geometry is None:
-            effective_notes.append(
-                "本次导出未包含 geometry.mat；当前来源尚未提供可复用的几何载荷。"
-            )
+            effective_notes.append(t("interop.svc.note.no_geometry_export"))
         if job.include_measurements and effective_measurements is None:
-            effective_notes.append(
-                "本次导出未包含边界电压数据；当前来源没有可导出的测量数组。"
-            )
+            effective_notes.append(t("interop.svc.note.no_measurements_export"))
 
         manifest = default_manifest(
             source_framework="pyeidors",
@@ -630,7 +621,7 @@ class InteropSmokeValidator:
                 difference, dtype=float
             ).reshape(-1)
         if homogeneous is None or target is None:
-            raise RuntimeError("冒烟验证需要 homogeneous 与 target 两组边界电压。")
+            raise RuntimeError(t("interop.svc.err.smoke_needs_two"))
 
         homogeneous = np.asarray(homogeneous, dtype=float).reshape(-1)
         target = np.asarray(target, dtype=float).reshape(-1)
@@ -651,15 +642,11 @@ class InteropSmokeValidator:
             "status": "compatible",
             "n_measurements": int(target.size),
             "mesh_dimension": int(config.mesh_dimension),
-            "message": (
-                f"数据兼容性检查通过：{int(target.size)} 个边界电压点可按当前布局解释。"
-            ),
+            "message": t("interop.svc.smoke.compat_ok", count=int(target.size)),
         }
 
         if int(config.mesh_dimension) == 3:
-            result["message"] += (
-                " 当前为 3D 配置，自动烟测默认跳过 full inverse，只完成输入兼容性验证。"
-            )
+            result["message"] += t("interop.svc.smoke.compat_3d_suffix")
             return result
 
         preset = (
@@ -729,9 +716,11 @@ class InteropSmokeValidator:
             {
                 "status": "inverse_ok",
                 "n_elements": int(conductivity.size),
-                "message": (
-                    f"逆问题烟测通过：{int(target.size)} 点边界电压已成功跑通 "
-                    f"{preset.method}，得到 {int(conductivity.size)} 个单元的重构结果。"
+                "message": t(
+                    "interop.svc.smoke.inverse_ok",
+                    count=int(target.size),
+                    method=preset.method,
+                    n_elements=int(conductivity.size),
                 ),
             }
         )

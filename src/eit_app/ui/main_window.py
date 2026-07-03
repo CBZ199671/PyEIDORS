@@ -81,6 +81,7 @@ from eit_app.models.simulation_state import (
     SimulationState,
 )
 from eit_app.models.reconstruction_methods import (
+    NOSER_SPARSE_METHOD,
     PSEUDO3D_NOSER_RM_METHOD,
     prepare_database_reconstruction_method,
     pseudo3d_noser_rm_metadata,
@@ -182,7 +183,6 @@ def _display_int_array(values: object) -> np.ndarray:
 if TYPE_CHECKING:
     from eit_app.interop.models import ReconstructionPreset
 
-_AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE = "AmgX 不可用时使用 spd_gamg CUDA"
 _RUNTIME_DIAGNOSTICS_ENV = "EIT_APP_SHOW_RUNTIME_DIAGNOSTICS"
 _CANONICAL_SINGLE_STEP_LAMBDA_EFF = 1.0e-2
 _CANONICAL_SINGLE_STEP_HP = float(np.sqrt(_CANONICAL_SINGLE_STEP_LAMBDA_EFF))
@@ -200,6 +200,11 @@ _CUSTOM_RM_LAMBDA_EFF_ROUTES = {
     PSEUDO3D_NOSER_RM_METHOD,
 }
 _GREIT_SIMULATION_ROUTES = {"greit", "greit_rm", "greit2d_rm", "greit3d_rm"}
+_SPARSE_SINGLE_STEP_SIMULATION_ROUTES = {
+    NOSER_SPARSE_METHOD,
+    "noser_matrix_free",
+    "matrix_free_noser",
+}
 
 
 def _greit_common_config_dir() -> str:
@@ -305,7 +310,7 @@ def _format_runtime_diagnostics(
         and solver_preset.lower() == "spd_gamg"
     )
     if amgx_downgraded or amgx_cuda_default:
-        parts.append(_AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE)
+        parts.append(t("diag.amgx_unavailable_spd_gamg"))
     if torch_device:
         parts.append(f"Torch={torch_device}")
     if jacobian_repr:
@@ -4372,19 +4377,9 @@ class EITWorkstation(QMainWindow):
         if "no serial port detected" in text:
             return t("main.hw_error.no_serial_ports")
 
-        # Raw messages in Chinese are upstream-formatted; pass them through
-        # untranslated so we don't double-localise already-localised content.
-        if (
-            "windows 串口" in raw
-            or "未找到串口设备" in raw
-            or "串口 " in raw
-            and "当前无法打开" in raw
-        ):
-            return raw
-
-        if "4g relay 服务器地址为空" in raw or "无法连接到 4g relay 服务器" in raw:
-            return raw
-
+        # Preflight summaries arrive already localised via the i18n translator,
+        # so any unmatched message falls through to the trailing ``return raw``
+        # untouched — no special-casing of locale-specific substrings needed.
         if "could not configure port" in text or "input/output error" in text:
             return t("main.hw_error.windows_port_invalid")
 
@@ -4663,6 +4658,15 @@ class EITWorkstation(QMainWindow):
             rm_regularization = "noser"
             rm_route_requires_artifact = True
             rm_auto_build = True
+        elif route in _SPARSE_SINGLE_STEP_SIMULATION_ROUTES:
+            route = NOSER_SPARSE_METHOD
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "eidors_one_step_noser"
+            route_kind = "sparse"
+            rm_regularization = "noser"
+            rm_route_requires_artifact = False
+            rm_auto_build = False
         elif route == "laplace_rm":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
@@ -4813,6 +4817,9 @@ class EITWorkstation(QMainWindow):
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
         )
         is_rm_difference = route_kind == "rm" and resolved_method == "gn-difference"
+        is_sparse_difference = (
+            route_kind == "sparse" and resolved_method == "gn-difference"
+        )
         # Match the EIDORS-style one-step paths: the GUI shows and records the
         # locked canonical lambda_eff instead of pretending user alpha applies.
         # Production RM paths build their RM in the same projected measurement
@@ -4820,7 +4827,9 @@ class EITWorkstation(QMainWindow):
         # lambda_eff current-scale stable; raw voltage magnitudes over-weight
         # boundary channels and can visibly suppress centered 2D inclusions.
         difference_mode = (
-            "normalized" if (is_3d_difference or is_rm_difference) else "raw"
+            "normalized"
+            if (is_3d_difference or is_rm_difference or is_sparse_difference)
+            else "raw"
         )
         locked_lambda_eff = (
             route in _ONE_STEP_LAMBDA_EFF_ROUTES
@@ -4837,6 +4846,8 @@ class EITWorkstation(QMainWindow):
             difference_lambda = max(float(alpha_input), 1.0e-12)
         elif locked_lambda_eff:
             difference_lambda = _CANONICAL_SINGLE_STEP_LAMBDA_EFF
+        elif is_sparse_difference:
+            difference_lambda = max(float(alpha_input), 1.0e-12)
         else:
             difference_lambda = None
         hp_eff = float(np.sqrt(difference_lambda)) if difference_lambda else None
@@ -4873,6 +4884,22 @@ class EITWorkstation(QMainWindow):
                 "hp": _CANONICAL_SINGLE_STEP_HP,
                 "hp_squared": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
                 "difference_lambda_semantics": "lambda_eff_equals_hp_squared",
+            }
+        elif is_sparse_difference and difference_lambda is not None:
+            hyperparameter_meta = {
+                "hyperparameter_ui_name": "lambda_eff",
+                "hyperparameter_ui_value": difference_lambda,
+                "hyperparameter_ui_locked": False,
+                "hyperparameter_effective_source": "single_step_sparse",
+                "hyperparameter_formula": "JtJ_plus_lambda_noser_diag",
+                "hyperparameter_diagnostic": "single_step_sparse_linearized_solve",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": True,
+                "lambda_eff": difference_lambda,
+                "lambda_eff_custom_enabled": False,
+                "hp": hp_eff,
+                "hp_squared": difference_lambda,
+                "difference_lambda_semantics": "single_step_sparse_lambda_eff",
             }
         elif greit_artifact_hyperparameter:
             greit_strategy = (
@@ -4953,18 +4980,24 @@ class EITWorkstation(QMainWindow):
             "rm_form": {
                 "noser_rm": "measurement",
                 PSEUDO3D_NOSER_RM_METHOD: "measurement",
-                "laplace_rm": "param",
-                "curvature_rm": "param",
+                "laplace_rm": "measurement",
+                "curvature_rm": "measurement",
                 "greit": "measurement",
                 "greit3d_rm": "measurement",
             }.get(route, ""),
             "rm_output_display_mode": "absolute_sigma"
             if route
-            in {"noser_rm", "laplace_rm", "curvature_rm", PSEUDO3D_NOSER_RM_METHOD}
+            in {
+                "noser_rm",
+                NOSER_SPARSE_METHOD,
+                "laplace_rm",
+                "curvature_rm",
+                PSEUDO3D_NOSER_RM_METHOD,
+            }
             else "",
             "rm_artifact_dir": _gui_rm_artifact_dir(),
             "reconstruction_runtime": reconstruction_runtime,
-            "jacobian_representation": "auto",
+            "jacobian_representation": "linearized" if is_sparse_difference else "auto",
             "linearized_solver_strategy": "auto",
             "linearized_maxiter": 0,
             "lazy_preconditioner_mode": "auto",
@@ -4976,10 +5009,15 @@ class EITWorkstation(QMainWindow):
                 {
                     "eit_value_mode": "complex_admittance",
                     "complex_measurement_mode": "native_real_imag",
-                    "complex_reconstruction_dispatch": "one_step_rm"
-                    if route_kind == "rm"
-                    and reconstruction_runtime == "single_step_cached"
-                    else "native_complex",
+                    "complex_reconstruction_dispatch": (
+                        "one_step_rm"
+                        if route_kind == "rm"
+                        and reconstruction_runtime == "single_step_cached"
+                        else "single_step_sparse"
+                        if is_sparse_difference
+                        and reconstruction_runtime == "single_step_cached"
+                        else "native_complex"
+                    ),
                 }
             )
         if greit_common_config_id:
@@ -4989,6 +5027,8 @@ class EITWorkstation(QMainWindow):
             metadata["rm_form"] = "measurement"
         if route_kind == "rm":
             metadata["online_hot_path"] = "rm_matmul"
+        elif is_sparse_difference:
+            metadata["online_hot_path"] = "single_step_sparse_linearized_solver"
         if difference_lambda is not None:
             metadata["difference_lambda"] = difference_lambda
         if rm_inverse_mesh_size is not None:

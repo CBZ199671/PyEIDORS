@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import numpy as np
 from scipy import sparse
+from scipy.sparse import linalg as sparse_linalg
 
 from pyeidors.cache.keys import update_digest_with_array_payload
 from pyeidors.data.channels import (
@@ -70,8 +71,17 @@ class RMArtifact:
     rec_model: np.ndarray | None = None
     greit_y: np.ndarray | None = None
     greit_d: np.ndarray | None = None
+    fit_matrix: np.ndarray | None = None
     path: str | None = None
     schema: str | None = None
+
+
+@dataclass(frozen=True)
+class _PriorInverseJtResult:
+    p_jt: np.ndarray
+    solver: str
+    ridge: float
+    ridge_source: str
 
 
 _RM_HDF5_STREAMING_CHUNK_TARGET_BYTES = 8 * 1024 * 1024
@@ -178,6 +188,7 @@ def write_rm_artifact(
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
     jacobian: Any | None = None,
+    fit_matrix: Any | None = None,
 ) -> Path:
     """Write a reconstruction matrix artifact in HDF5 format."""
 
@@ -200,6 +211,7 @@ def write_rm_artifact(
         ("channel_mask", channel_mask),
         ("measurement_weights", measurement_weights),
         ("jacobian", jacobian),
+        ("fit_matrix", fit_matrix),
     ):
         if value is not None:
             arrays[key] = np.asarray(value)
@@ -446,6 +458,26 @@ def _optional_node_coords_array(
     return np.asarray(arr, dtype=np.float64)
 
 
+def _optional_numeric_artifact_array(
+    arrays: Mapping[str, Any], key: str
+) -> np.ndarray | None:
+    if key not in arrays:
+        return None
+    if arrays[key] is None:
+        return None
+    arr = np.asarray(arrays[key])
+    if arr.size == 0:
+        return None
+    if arr.dtype not in (
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+        np.dtype(np.complex64),
+        np.dtype(np.complex128),
+    ):
+        arr = arr.astype(np.float64, copy=False)
+    return np.asarray(arr)
+
+
 def _optional_artifact_array_aliases(
     arrays: Mapping[str, Any],
     *keys: str,
@@ -493,6 +525,7 @@ def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
             "D",
             dtype=np.float64,
         ),
+        fit_matrix=_optional_numeric_artifact_array(arrays, "fit_matrix"),
         path=str(path),
         schema=artifact.schema,
     )
@@ -546,6 +579,7 @@ def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
             "D",
             dtype=np.float64,
         ),
+        fit_matrix=_optional_numeric_artifact_array(arrays, "fit_matrix"),
         path=str(path),
         schema="legacy-npz",
     )
@@ -749,6 +783,239 @@ def _prior_diagonal(
     return np.ascontiguousarray(diag, dtype=resolved_dtype)
 
 
+def _measurement_prior_scale(
+    value: np.ndarray | sparse.spmatrix,
+) -> float:
+    if sparse.issparse(value):
+        data = np.asarray(value.data)
+        data_max = float(np.max(np.abs(data))) if data.size else 0.0
+        diag = np.asarray(value.diagonal())
+        diag_max = float(np.max(np.abs(diag))) if diag.size else 0.0
+        return max(data_max, diag_max, 1.0)
+    array = np.asarray(value)
+    if array.size == 0:
+        return 1.0
+    return max(float(np.max(np.abs(array))), 1.0)
+
+
+def _measurement_prior_auto_ridge(
+    *,
+    dtype: str | np.dtype[Any] | type,
+    scale: float,
+) -> float:
+    resolved = np.dtype(dtype)
+    relative = (
+        float(np.sqrt(np.finfo(np.float32).eps))
+        if resolved in {np.dtype("float32"), np.dtype("complex64")}
+        else 1.0e-9
+    )
+    return float(relative * max(float(scale), 1.0))
+
+
+def _resolve_measurement_prior_ridge(
+    measurement_prior_ridge: float | None,
+    *,
+    dtype: str | np.dtype[Any] | type,
+    scale: float,
+    prefer_ridge: bool,
+    force: bool = False,
+) -> tuple[float, str]:
+    if measurement_prior_ridge is not None:
+        ridge = float(measurement_prior_ridge)
+        if ridge < 0.0 or not np.isfinite(ridge):
+            raise ValueError("measurement_prior_ridge must be finite and non-negative.")
+        return ridge, "provided" if ridge > 0.0 else "none"
+    if prefer_ridge or force:
+        return (
+            _measurement_prior_auto_ridge(dtype=dtype, scale=scale),
+            "auto",
+        )
+    return 0.0, "none"
+
+
+def _add_sparse_diagonal(
+    matrix: sparse.spmatrix,
+    value: float,
+    *,
+    dtype: str | np.dtype[Any] | type,
+) -> sparse.csc_matrix:
+    if value <= 0.0:
+        return sparse.csc_matrix(matrix, dtype=dtype)
+    identity = sparse.eye(matrix.shape[0], format="csc", dtype=dtype)
+    return sparse.csc_matrix(matrix, dtype=dtype) + identity * value
+
+
+def _add_dense_diagonal(
+    matrix: np.ndarray,
+    value: float,
+    *,
+    dtype: str | np.dtype[Any] | type,
+) -> np.ndarray:
+    out = np.array(matrix, dtype=dtype, copy=True, order="C")
+    if value > 0.0:
+        add_scaled_diagonal_in_place(out, np.ones(out.shape[0], dtype=out.dtype), value)
+    return out
+
+
+def _diagonal_prior_inverse_usable(values: np.ndarray) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if np.iscomplexobj(arr):
+        return bool(np.all(np.abs(arr) > 0.0))
+    real_arr = np.asarray(np.real_if_close(arr, tol=1000)).reshape(-1)
+    if np.iscomplexobj(real_arr):
+        return bool(np.all(np.abs(arr) > 0.0))
+    return bool(np.all(np.real(real_arr) > 0.0))
+
+
+def _solve_sparse_prior_inverse_times_jt(
+    matrix: sparse.spmatrix,
+    rhs: np.ndarray,
+    *,
+    dtype: str | np.dtype[Any] | type,
+    measurement_prior_ridge: float | None,
+    prefer_ridge: bool,
+) -> _PriorInverseJtResult:
+    resolved_dtype = _resolve_float_dtype(dtype)
+    csr = sparse.csr_matrix(matrix, dtype=resolved_dtype)
+    scale = _measurement_prior_scale(csr)
+    ridge, ridge_source = _resolve_measurement_prior_ridge(
+        measurement_prior_ridge,
+        dtype=resolved_dtype,
+        scale=scale,
+        prefer_ridge=prefer_ridge,
+    )
+    try:
+        lu = sparse_linalg.splu(_add_sparse_diagonal(csr, ridge, dtype=resolved_dtype))
+    except RuntimeError:
+        ridge, ridge_source = _resolve_measurement_prior_ridge(
+            measurement_prior_ridge,
+            dtype=resolved_dtype,
+            scale=scale,
+            prefer_ridge=True,
+            force=True,
+        )
+        lu = sparse_linalg.splu(_add_sparse_diagonal(csr, ridge, dtype=resolved_dtype))
+    p_jt = np.asarray(lu.solve(rhs), dtype=resolved_dtype)
+    solver = "sparse_lu_ridge" if ridge > 0.0 else "sparse_lu"
+    return _PriorInverseJtResult(
+        p_jt=np.ascontiguousarray(p_jt, dtype=resolved_dtype),
+        solver=solver,
+        ridge=float(ridge),
+        ridge_source=ridge_source,
+    )
+
+
+def _solve_dense_prior_inverse_times_jt(
+    matrix: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    dtype: str | np.dtype[Any] | type,
+    measurement_prior_ridge: float | None,
+    prefer_ridge: bool,
+) -> _PriorInverseJtResult:
+    resolved_dtype = _resolve_float_dtype(dtype)
+    dense = np.asarray(matrix, dtype=resolved_dtype)
+    scale = _measurement_prior_scale(dense)
+    ridge, ridge_source = _resolve_measurement_prior_ridge(
+        measurement_prior_ridge,
+        dtype=resolved_dtype,
+        scale=scale,
+        prefer_ridge=prefer_ridge,
+    )
+    try:
+        p_jt = np.linalg.solve(
+            _add_dense_diagonal(dense, ridge, dtype=resolved_dtype),
+            rhs,
+        )
+        solver = "solve_ridge" if ridge > 0.0 else "solve"
+    except np.linalg.LinAlgError:
+        ridge, ridge_source = _resolve_measurement_prior_ridge(
+            measurement_prior_ridge,
+            dtype=resolved_dtype,
+            scale=scale,
+            prefer_ridge=True,
+            force=True,
+        )
+        p_jt = np.linalg.solve(
+            _add_dense_diagonal(dense, ridge, dtype=resolved_dtype),
+            rhs,
+        )
+        solver = "solve_ridge" if ridge > 0.0 else "solve"
+    return _PriorInverseJtResult(
+        p_jt=np.ascontiguousarray(np.asarray(p_jt), dtype=resolved_dtype),
+        solver=solver,
+        ridge=float(ridge),
+        ridge_source=ridge_source,
+    )
+
+
+def _prior_inverse_times_jacobian_adjoint(
+    prior: RtRPrior,
+    jac_adjoint: np.ndarray,
+    *,
+    name: str,
+    dtype: str | np.dtype[Any] | type,
+    measurement_prior_ridge: float | None,
+    prefer_ridge: bool,
+) -> _PriorInverseJtResult:
+    resolved_dtype = _resolve_float_dtype(dtype)
+    if prior.kind in {"diagonal_sparse", "identity_sparse"}:
+        diag = _prior_diagonal(prior, dtype=resolved_dtype)
+        if diag is not None:
+            diag_values = np.asarray(diag, dtype=resolved_dtype).reshape(-1)
+            ridge = 0.0
+            ridge_source = "none"
+            if not _diagonal_prior_inverse_usable(diag_values):
+                ridge, ridge_source = _resolve_measurement_prior_ridge(
+                    measurement_prior_ridge,
+                    dtype=resolved_dtype,
+                    scale=_measurement_prior_scale(diag_values),
+                    prefer_ridge=True,
+                    force=True,
+                )
+                diag_values = np.asarray(diag_values + ridge, dtype=resolved_dtype)
+            if _diagonal_prior_inverse_usable(diag_values):
+                p_jt = jac_adjoint / diag_values.reshape(-1, 1)
+                solver = "diagonal_ridge" if ridge > 0.0 else "diagonal"
+                return _PriorInverseJtResult(
+                    p_jt=np.ascontiguousarray(p_jt, dtype=resolved_dtype),
+                    solver=solver,
+                    ridge=float(ridge),
+                    ridge_source=ridge_source,
+                )
+    explicit = prior.as_RtR(dense=False)
+    if sparse.issparse(explicit):
+        return _solve_sparse_prior_inverse_times_jt(
+            explicit,
+            jac_adjoint,
+            dtype=resolved_dtype,
+            measurement_prior_ridge=measurement_prior_ridge,
+            prefer_ridge=prefer_ridge,
+        )
+    if isinstance(explicit, np.ndarray):
+        return _solve_dense_prior_inverse_times_jt(
+            explicit,
+            jac_adjoint,
+            dtype=resolved_dtype,
+            measurement_prior_ridge=measurement_prior_ridge,
+            prefer_ridge=prefer_ridge,
+        )
+    dense = _prior_to_dense_matrix(prior, name=name, dtype=resolved_dtype)
+    result = _solve_dense_prior_inverse_times_jt(
+        dense,
+        jac_adjoint,
+        dtype=resolved_dtype,
+        measurement_prior_ridge=measurement_prior_ridge,
+        prefer_ridge=prefer_ridge,
+    )
+    return _PriorInverseJtResult(
+        p_jt=result.p_jt,
+        solver=f"dense_materialized_{result.solver}",
+        ridge=result.ridge,
+        ridge_source=result.ridge_source,
+    )
+
+
 def _prior_nnz(prior: RtRPrior) -> int:
     if prior.nnz is not None:
         return int(prior.nnz)
@@ -919,6 +1186,7 @@ def build_one_step_rm(
     measurement_regularization: Any = None,
     noser_floor: float = 1e-12,
     noser_exponent: float = 0.5,
+    measurement_prior_ridge: float | None = None,
     dtype: str | np.dtype[Any] = "float64",
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
@@ -928,6 +1196,8 @@ def build_one_step_rm(
     ``form="measurement"`` uses
     ``RM = P J.T (J P J.T + lambda_**2 Rn)^-1`` with ``P≈R^-1`` and
     identity ``Rn`` by default.
+    Graph/TV priors use tiny automatic measurement_prior_ridge so
+    prior inverse stays sparse and well posed.
     ``mode="noser"`` defaults to the EIDORS-style
     ``R = diag(J.T @ J)**0.5`` for real-valued Jacobians and the EIDORS
     complex projected-Jacobian convention for complex-valued Jacobians; pass
@@ -982,24 +1252,21 @@ def build_one_step_rm(
             n_measurements=int(jac.shape[0]),
             dtype=calc_dtype,
         )
-        diag = _prior_diagonal(reg_prior, dtype=calc_dtype)
-        diag_real = np.real_if_close(diag, tol=1000) if diag is not None else None
-        diag_positive = bool(
-            diag_real is not None
-            and not np.iscomplexobj(diag_real)
-            and np.all(np.asarray(diag_real) > 0.0)
+        prior_inverse = _prior_inverse_times_jacobian_adjoint(
+            reg_prior,
+            jac_adjoint,
+            name=resolved_mode,
+            dtype=calc_dtype,
+            measurement_prior_ridge=measurement_prior_ridge,
+            prefer_ridge=resolved_mode
+            in {"laplace", "curvature", "graph_ltl", "tv_irls"},
         )
-        if reg_prior.kind == "diagonal_sparse" and diag is not None and diag_positive:
-            p_jt = jac_adjoint / np.asarray(diag_real, dtype=calc_dtype).reshape(-1, 1)
-            prior_inverse_solver = "diagonal"
-        else:
-            reg = _prior_to_dense_matrix(
-                reg_prior,
-                name=resolved_mode,
-                dtype=calc_dtype,
+        p_jt = prior_inverse.p_jt
+        prior_inverse_solver = prior_inverse.solver
+        if not all_finite_values(p_jt):
+            raise FloatingPointError(
+                "measurement prior inverse produced non-finite values."
             )
-            p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac_adjoint)
-            p_jt = np.asarray(p_jt, dtype=calc_dtype)
         lhs = np.ascontiguousarray(jac @ p_jt, dtype=calc_dtype)
         if rn_kind == "diagonal":
             add_scaled_diagonal_in_place(lhs, rn, lam * lam)
@@ -1011,6 +1278,12 @@ def build_one_step_rm(
     else:
         rn_source = "unused"
         prior_inverse_solver = "unused"
+        prior_inverse = _PriorInverseJtResult(
+            p_jt=np.empty((0, 0), dtype=calc_dtype),
+            solver=prior_inverse_solver,
+            ridge=0.0,
+            ridge_source="unused",
+        )
         reg = _prior_to_dense_matrix(reg_prior, name=resolved_mode, dtype=calc_dtype)
         lhs = np.asarray(jac_adjoint @ jac + (lam * lam) * reg, dtype=calc_dtype)
         rm, solver = _solve_or_pinv(lhs, jac_adjoint)
@@ -1062,6 +1335,8 @@ def build_one_step_rm(
             if resolved_mode == "noser"
             else None,
             "measurement_regularization_source": rn_source,
+            "measurement_prior_ridge": float(prior_inverse.ridge),
+            "measurement_prior_ridge_source": prior_inverse.ridge_source,
             "condition_estimate": condition_estimate,
             "solver": solver,
             "prior_inverse_solver": prior_inverse_solver,

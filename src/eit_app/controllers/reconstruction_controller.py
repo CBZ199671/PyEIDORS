@@ -68,7 +68,7 @@ _ONE_STEP_RM_SIGNATURE_SCHEMA_VERSION = "one_step_rm_signature_schema_v2"
 _ONE_STEP_RM_JACOBIAN_BUILD_CONVENTION = "dense_eidors_adapter_jacobian_v3"
 _ONE_STEP_RM_PRIOR_MATH_CONVENTION = "singular_graph_prior_param_form_hp2_rtr_v5"
 _ONE_STEP_RM_ALGORITHM_VERSION = "one_step_rm_auto_build_dense_jacobian_v7"
-_ONE_STEP_RM_CONTENT_CONTRACT = "one_step_rm_hdf5_dense_fit_jacobian_contract_v1"
+_ONE_STEP_RM_CONTENT_CONTRACT = "one_step_rm_hdf5_dense_fit_matrix_contract_v2"
 _RM_ARTIFACT_CACHE_LOCK = threading.Lock()
 _RM_ARTIFACT_CACHE_MAX_ITEMS = 4
 _RM_ARTIFACT_CACHE_MAX_BYTES = 512 * 1024 * 1024
@@ -102,6 +102,12 @@ _ONE_STEP_RM_ROUTE_REGULARIZATION = {
     "curvature_rm": "curvature",
 }
 _AUTO_BUILD_RM_ROUTES = frozenset(_ONE_STEP_RM_ROUTE_REGULARIZATION)
+_SPARSE_SINGLE_STEP_ROUTE_REGULARIZATION = {
+    "noser_sparse": "noser",
+    "noser_matrix_free": "noser",
+    "matrix_free_noser": "noser",
+}
+_SPARSE_SINGLE_STEP_ROUTES = frozenset(_SPARSE_SINGLE_STEP_ROUTE_REGULARIZATION)
 _GREIT_REGISTRY_ROUTES = frozenset({"greit", "greit_rm", "greit2d_rm", "greit3d_rm"})
 _EIT_SYSTEM_DIFFERENCE_PRESETS = frozenset(
     {"eidors_demo3d_tv", "eidors_one_step_noser", "sphere_multistep_noser"}
@@ -1343,6 +1349,12 @@ class _RMFitJacobianReadResult:
     nbytes: int | None = None
 
 
+@dataclass(frozen=True)
+class _RMFitMatrixReadResult:
+    status: str
+    nbytes: int | None = None
+
+
 def _rm_fit_jacobian_cache_key(path: Path, signature: Any) -> str:
     signature_text = str(signature or "").strip()
     if signature_text:
@@ -1354,6 +1366,31 @@ def _rm_fit_jacobian_cache_key(path: Path, signature: Any) -> str:
 
 
 def _fit_jacobian_array(
+    value: Any,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    try:
+        arr = np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if arr.dtype not in (
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+        np.dtype(np.complex64),
+        np.dtype(np.complex128),
+    ):
+        arr = arr.astype(np.float64, copy=False)
+    if arr.ndim != 2 or 0 in arr.shape or not all_finite_values(arr):
+        return None
+    if expected_shape is not None and tuple(int(v) for v in arr.shape) != tuple(
+        int(v) for v in expected_shape
+    ):
+        return None
+    return np.ascontiguousarray(arr)
+
+
+def _fit_matrix_array(
     value: Any,
     *,
     expected_shape: tuple[int, int] | None = None,
@@ -1476,6 +1513,40 @@ def _read_rm_artifact_fit_jacobian_result(
         return _RMFitJacobianReadResult(None, "error")
 
 
+def _read_rm_artifact_fit_matrix_result(
+    path: Path,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> _RMFitMatrixReadResult:
+    if path.suffix.lower() not in {".h5", ".hdf5"}:
+        return _RMFitMatrixReadResult("unsupported_format")
+    try:
+        from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+
+        artifact = read_hdf5_artifact(
+            path,
+            lazy=True,
+            verify_checksums=False,
+        )
+        raw = artifact.arrays.get("fit_matrix")
+        if raw is None:
+            return _RMFitMatrixReadResult("missing")
+        raw_shape = _array_like_shape(raw)
+        raw_nbytes = _array_like_nbytes(raw)
+        if expected_shape is not None and raw_shape is not None:
+            if tuple(raw_shape) != tuple(int(v) for v in expected_shape):
+                return _RMFitMatrixReadResult("shape_mismatch", raw_nbytes)
+        if expected_shape is not None and raw_shape is None:
+            arr = _fit_matrix_array(raw, expected_shape=expected_shape)
+            if arr is None:
+                return _RMFitMatrixReadResult("invalid", raw_nbytes)
+            return _RMFitMatrixReadResult("hit", int(arr.nbytes))
+        return _RMFitMatrixReadResult("hit", raw_nbytes)
+    except Exception as exc:
+        log.debug("Could not inspect RM fit matrix from %s: %s", path, exc)
+        return _RMFitMatrixReadResult("error")
+
+
 def _fit_jacobian_metadata_declares_too_large(metadata: dict[str, Any]) -> bool:
     persisted = metadata.get("fit_jacobian_persisted")
     if isinstance(persisted, bool):
@@ -1569,6 +1640,84 @@ def _restore_rm_fit_jacobian(
     else:
         runtime.meta["rm_fit_jacobian_cache_status"] = f"artifact_{read_result.status}"
     return None
+
+
+def _rm_fit_matrix_product(
+    fit_matrix: Any,
+    residual: Any,
+    *,
+    dtype: np.dtype[Any],
+    meta: dict[str, Any],
+) -> np.ndarray | None:
+    vector = np.asarray(residual, dtype=dtype).reshape(-1)
+    if vector.size == 0:
+        return None
+    expected_shape = (int(vector.size), int(vector.size))
+    raw_shape = _array_like_shape(fit_matrix)
+    if raw_shape is not None and tuple(raw_shape) != expected_shape:
+        return None
+    raw_dtype = np.dtype(getattr(fit_matrix, "dtype", dtype))
+    out_dtype = np.result_type(raw_dtype, vector.dtype)
+    vector = np.asarray(vector, dtype=out_dtype)
+    if raw_shape == expected_shape and hasattr(fit_matrix, "__getitem__"):
+        try:
+            rows, cols = expected_shape
+            rows_per_chunk = _rm_streaming_rows_per_chunk(
+                fit_matrix,
+                rows=rows,
+                cols=cols,
+                dtype=np.dtype(out_dtype),
+                chunk_bytes=_rm_streaming_chunk_bytes(meta),
+            )
+            _mode, blocks = _iter_rm_row_blocks(
+                fit_matrix,
+                rows=rows,
+                cols=cols,
+                rows_per_chunk=rows_per_chunk,
+                dtype=np.dtype(out_dtype),
+            )
+            out = np.empty(rows, dtype=out_dtype)
+            for start, block in blocks:
+                block_arr = np.asarray(block, dtype=out_dtype)
+                stop = int(start) + int(block_arr.shape[0])
+                out[int(start) : stop] = block_arr @ vector
+            if all_finite_values(out):
+                return np.asarray(out, dtype=out_dtype)
+        except Exception:
+            pass
+
+    matrix = _fit_matrix_array(fit_matrix, expected_shape=expected_shape)
+    if matrix is None:
+        return None
+    try:
+        out = np.asarray(matrix, dtype=out_dtype) @ vector
+    except Exception:
+        return None
+    if not all_finite_values(out):
+        return None
+    return np.asarray(out, dtype=out_dtype).reshape(-1)
+
+
+def _rm_fit_contract_vector(
+    residual: Any,
+    artifact: dict[str, Any],
+    *,
+    dtype: np.dtype[Any],
+) -> np.ndarray | None:
+    try:
+        from pyeidors.data.channels import apply_measurement_contract_to_vector
+
+        contracted, _ = apply_measurement_contract_to_vector(
+            residual,
+            channel_mask=artifact.get("channel_mask"),
+            measurement_weights=artifact.get("measurement_weights"),
+        )
+    except Exception:
+        return None
+    try:
+        return np.asarray(contracted, dtype=dtype).reshape(-1)
+    except Exception:
+        return None
 
 
 def _contact_impedance_array(value: Any, default: complex = 0.01 + 0.0j) -> np.ndarray:
@@ -2635,13 +2784,28 @@ def _one_step_rm_regularization(meta: dict[str, Any]) -> str:
 
 
 def _is_auto_built_one_step_rm_route(meta: dict[str, Any]) -> bool:
-    return _simulation_inverse_route(meta) in _AUTO_BUILD_RM_ROUTES
+    return (
+        not _is_sparse_single_step_route(meta)
+        and _simulation_inverse_route(meta) in _AUTO_BUILD_RM_ROUTES
+    )
+
+
+def _is_sparse_single_step_route(meta: dict[str, Any]) -> bool:
+    route = _simulation_inverse_route(meta)
+    route_kind = str(meta.get("simulation_inverse_route_kind", "")).strip().lower()
+    return route in _SPARSE_SINGLE_STEP_ROUTES or route_kind in {
+        "sparse",
+        "matrix_free",
+        "matrix-free",
+    }
 
 
 def _should_auto_build_rm_artifact(meta: dict[str, Any]) -> bool:
     route = _simulation_inverse_route(meta)
-    return route in _AUTO_BUILD_RM_ROUTES and _flag_enabled(
-        meta.get("rm_auto_build", False)
+    return (
+        not _is_sparse_single_step_route(meta)
+        and route in _AUTO_BUILD_RM_ROUTES
+        and _flag_enabled(meta.get("rm_auto_build", False))
     )
 
 
@@ -2817,13 +2981,7 @@ def _array_pair_hash(*arrays: Any) -> str:
 def _one_step_rm_form(
     meta: dict[str, Any], regularization_type: str | None = None
 ) -> str:
-    regularization = (
-        str(regularization_type or _one_step_rm_regularization(meta) or "noser")
-        .strip()
-        .lower()
-    )
-    if regularization in {"laplace", "curvature", "graph_ltl", "tv_irls"}:
-        return "param"
+    _ = regularization_type
     requested = str(meta.get("rm_form", "")).strip().lower()
     if requested in {"param", "measurement"}:
         return requested
@@ -2935,8 +3093,16 @@ def _planned_one_step_rm_signature(
             "hp_squared": hp * hp,
             "lambda_eff": float(runtime.lam),
             "form": rm_form,
-            "singular_prior_form_policy": "param_for_graph_laplace_curvature_v1"
-            if regularization_type in {"laplace", "curvature", "graph_ltl"}
+            "singular_prior_form_policy": (
+                "measurement_prior_auto_ridge_v1"
+                if regularization_type in {"laplace", "curvature", "graph_ltl"}
+                and rm_form == "measurement"
+                else "param_for_graph_laplace_curvature_v1"
+                if regularization_type in {"laplace", "curvature", "graph_ltl"}
+                else None
+            ),
+            "measurement_prior_inverse_policy": "auto_sparse_or_diagonal_ridge_v1"
+            if rm_form == "measurement"
             else None,
             "rm_signature_schema_version": str(
                 meta.get("one_step_rm_signature_schema_version", "")
@@ -3031,9 +3197,17 @@ def _ensure_auto_built_one_step_rm_artifact(
             path=artifact_path,
             signature=signature,
         )
-        if fit_jacobian is not None or bool(
-            runtime.meta.get("rm_fit_jacobian_available_but_skipped", False)
-        ):
+        fit_matrix_result = _read_rm_artifact_fit_matrix_result(
+            artifact_path,
+            expected_shape=(
+                max(_request_measurement_count(req), 1),
+                max(_request_measurement_count(req), 1),
+            ),
+        )
+        runtime.meta["rm_fit_matrix_cache_status"] = fit_matrix_result.status
+        if fit_matrix_result.nbytes is not None:
+            runtime.meta["rm_fit_matrix_bytes"] = int(fit_matrix_result.nbytes)
+        if fit_jacobian is not None or fit_matrix_result.status == "hit":
             runtime.meta["rm_artifact_path"] = str(artifact_path)
             runtime.meta["dual_model_rm_path"] = str(artifact_path)
             runtime.meta["rm_artifact_auto_built"] = False
@@ -3042,14 +3216,22 @@ def _ensure_auto_built_one_step_rm_artifact(
             log.info(message)
             emit(message)
             return artifact_path
-        runtime.meta["rm_artifact_cache_status"] = "disk_fit_jacobian_miss"
-        message = (
-            f"Cached {regularization_type.upper()} RM artifact lacks voltage-fit "
-            "Jacobian; rebuilding..."
-        )
-        log.info(message)
-        emit(message)
-
+        if bool(runtime.meta.get("rm_fit_jacobian_available_but_skipped", False)):
+            runtime.meta["rm_artifact_cache_status"] = "disk_fit_matrix_miss"
+            message = (
+                f"Cached {regularization_type.upper()} RM artifact lacks voltage-fit "
+                "matrix; rebuilding..."
+            )
+            log.info(message)
+            emit(message)
+        else:
+            runtime.meta["rm_artifact_cache_status"] = "disk_fit_jacobian_miss"
+            message = (
+                f"Cached {regularization_type.upper()} RM artifact lacks voltage-fit "
+                "Jacobian; rebuilding..."
+            )
+            log.info(message)
+            emit(message)
     diff_runner = _load_gn_difference_runner_module()
     message = f"Building {regularization_type.upper()} RM artifact..."
     log.info(message)
@@ -3116,6 +3298,25 @@ def _ensure_auto_built_one_step_rm_artifact(
     fit_jacobian_max_bytes = _rm_fit_jacobian_max_bytes(runtime.meta)
     fit_jacobian_bytes = int(jacobian.nbytes)
     persist_fit_jacobian = fit_jacobian_bytes <= int(max(0, fit_jacobian_max_bytes))
+    fit_matrix: np.ndarray | None = None
+    fit_matrix_status = "not_built"
+    try:
+        fit_matrix = np.ascontiguousarray(
+            np.asarray(jacobian @ np.asarray(rm.rm, dtype=rm_dtype), dtype=rm_dtype)
+        )
+        if fit_matrix.shape != (int(jacobian.shape[0]), int(jacobian.shape[0])):
+            fit_matrix = None
+            fit_matrix_status = "shape_mismatch"
+        elif not all_finite_values(fit_matrix):
+            fit_matrix = None
+            fit_matrix_status = "nonfinite"
+        else:
+            fit_matrix_status = "built"
+    except Exception as exc:
+        log.debug("Could not build RM voltage-fit matrix: %s", exc)
+        fit_matrix = None
+        fit_matrix_status = "error"
+    fit_matrix_bytes = int(fit_matrix.nbytes) if fit_matrix is not None else 0
     metadata = {
         "algorithm": f"one-step-{regularization_type}",
         "rm_build_route": route,
@@ -3137,8 +3338,16 @@ def _ensure_auto_built_one_step_rm_artifact(
         "rm_form": rm_form,
         "rm_dtype": rm_dtype_name,
         "rm_build_dtype": rm_dtype_name,
-        "singular_prior_form_policy": "param_for_graph_laplace_curvature_v1"
-        if regularization_type in {"laplace", "curvature", "graph_ltl"}
+        "singular_prior_form_policy": (
+            "measurement_prior_auto_ridge_v1"
+            if regularization_type in {"laplace", "curvature", "graph_ltl"}
+            and rm_form == "measurement"
+            else "param_for_graph_laplace_curvature_v1"
+            if regularization_type in {"laplace", "curvature", "graph_ltl"}
+            else ""
+        ),
+        "measurement_prior_inverse_policy": "auto_sparse_or_diagonal_ridge_v1"
+        if rm_form == "measurement"
         else "",
         "one_step_rm_signature_schema_version": str(
             runtime.meta.get("one_step_rm_signature_schema_version", "")
@@ -3159,6 +3368,11 @@ def _ensure_auto_built_one_step_rm_artifact(
         "rm_fit_jacobian_bytes": fit_jacobian_bytes,
         "rm_fit_jacobian_max_bytes": int(fit_jacobian_max_bytes),
         "fit_jacobian_persist_skip_reason": "" if persist_fit_jacobian else "too_large",
+        "fit_matrix_persisted": fit_matrix is not None,
+        "fit_matrix_source": "raw_jacobian_times_rm" if fit_matrix is not None else "",
+        "fit_matrix_status": fit_matrix_status,
+        "rm_fit_matrix_bytes": fit_matrix_bytes,
+        "rm_fit_matrix_shape": list(fit_matrix.shape) if fit_matrix is not None else [],
         "rm_output_display_mode": str(
             runtime.meta.get("rm_output_display_mode", "absolute_sigma")
         ),
@@ -3200,6 +3414,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         channel_mask=channel_mask,
         measurement_weights=weights,
         jacobian=jacobian if persist_fit_jacobian else None,
+        fit_matrix=fit_matrix,
     )
     runtime.meta["rm_artifact_path"] = str(artifact_path)
     runtime.meta["dual_model_rm_path"] = str(artifact_path)
@@ -3207,6 +3422,8 @@ def _ensure_auto_built_one_step_rm_artifact(
     runtime.meta["rm_artifact_cache_status"] = "built"
     runtime.meta["rm_fit_jacobian_bytes"] = fit_jacobian_bytes
     runtime.meta["rm_fit_jacobian_max_bytes"] = int(fit_jacobian_max_bytes)
+    runtime.meta["rm_fit_matrix_bytes"] = fit_matrix_bytes
+    runtime.meta["rm_fit_matrix_cache_status"] = fit_matrix_status
     if persist_fit_jacobian:
         _stash_rm_fit_jacobian(
             runtime,
@@ -3444,6 +3661,7 @@ def _load_hdf5_rm_artifact_lightweight(
     greit_d = _optional_lazy_artifact_handle(arrays, "d")
     if greit_d is None:
         greit_d = _optional_lazy_artifact_handle(arrays, "D")
+    fit_matrix = _optional_lazy_artifact_handle(arrays, "fit_matrix")
     node_coords = _optional_lazy_artifact_array(arrays, "node_coords", dtype=np.float64)
     cell_connectivity = _optional_lazy_artifact_array(
         arrays, "cell_connectivity", dtype=np.int32
@@ -3469,6 +3687,7 @@ def _load_hdf5_rm_artifact_lightweight(
         "rec_model": rec_model,
         "greit_y": greit_y,
         "greit_d": greit_d,
+        "fit_matrix": fit_matrix,
         "schema": artifact.schema,
     }
 
@@ -3538,6 +3757,7 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         "rec_model": artifact.rec_model,
         "greit_y": artifact.greit_y,
         "greit_d": artifact.greit_d,
+        "fit_matrix": artifact.fit_matrix,
         "schema": artifact.schema,
     }
 
@@ -3596,6 +3816,7 @@ def _rm_artifact_cache_entry_bytes(entry: dict[str, Any]) -> int:
         "rec_model",
         "greit_y",
         "greit_d",
+        "fit_matrix",
     ):
         value = entry.get(key)
         nbytes = _array_like_nbytes(value)
@@ -4353,13 +4574,26 @@ def _try_run_cached_rm_request(
     simulated_dv: np.ndarray | None = None
     artifact_meta = dict(artifact.get("metadata", {}) or {})
     rm_signature = runtime.meta.get("rm_signature") or artifact_meta.get("rm_signature")
+    fit_matrix = artifact.get("fit_matrix")
+    if fit_matrix is not None:
+        fit_input = _rm_fit_contract_vector(dv, artifact, dtype=np_dtype)
+        if fit_input is not None:
+            simulated_dv = _rm_fit_matrix_product(
+                fit_matrix,
+                fit_input,
+                dtype=np_dtype,
+                meta=runtime.meta,
+            )
+            if simulated_dv is not None:
+                runtime.meta["rm_fit_source"] = "rm_fit_matrix"
+                runtime.meta["rm_fit_matrix_cache_status"] = "hit"
     inmem_jacobian = _restore_rm_fit_jacobian(
         runtime,
         path=path,
         signature=rm_signature,
         expected_shape=(int(dv.size), int(delta_conductivity.size)),
     )
-    if inmem_jacobian is not None:
+    if simulated_dv is None and inmem_jacobian is not None:
         try:
             jac = np.asarray(inmem_jacobian, dtype=np_dtype)
             if (
@@ -4370,6 +4604,8 @@ def _try_run_cached_rm_request(
                 simulated_dv = np.asarray(jac @ delta_conductivity, dtype=np_dtype)
                 if not all_finite_values(simulated_dv):
                     simulated_dv = None
+                else:
+                    runtime.meta["rm_fit_source"] = "rm_fit_jacobian"
         except Exception:
             simulated_dv = None
     if (
@@ -4651,9 +4887,11 @@ def _prepare_single_step_cached_runtime(
     meta["drive_value"] = _resolve_drive_value(meta)
     runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=mesh_dim)
     meta.update(runtime_options)
-    jac_repr = (
+    sparse_single_step = _is_sparse_single_step_route(meta)
+    raw_jac_repr = (
         str(meta.get("jacobian_representation", "auto") or "auto").strip().lower()
     )
+    jac_repr = raw_jac_repr
     jac_repr = jac_repr.replace("_", "-")
     if jac_repr in {"", "auto"}:
         measurement_count = _request_measurement_count(req)
@@ -4679,6 +4917,39 @@ def _prepare_single_step_cached_runtime(
         )
     else:
         meta["jacobian_representation_reason"] = f"explicit_{jac_repr}"
+    if sparse_single_step:
+        meta["single_step_sparse_solver"] = True
+        meta["rm_route_requires_artifact"] = False
+        meta["rm_auto_build"] = False
+        meta["rm_regularization"] = _SPARSE_SINGLE_STEP_ROUTE_REGULARIZATION.get(
+            _simulation_inverse_route(meta),
+            str(meta.get("rm_regularization", "noser") or "noser"),
+        )
+        meta["online_hot_path"] = str(
+            meta.get("online_hot_path") or "single_step_sparse_linearized_solver"
+        )
+        if jac_repr == "lazy":
+            meta["jacobian_representation_reason"] = "sparse_route_explicit_lazy"
+        elif jac_repr == "linearized":
+            if raw_jac_repr.replace("_", "-") in {"", "auto"}:
+                meta["jacobian_representation_reason"] = (
+                    "sparse_route_default_linearized"
+                )
+            else:
+                meta["jacobian_representation_reason"] = (
+                    "sparse_route_explicit_linearized"
+                )
+        else:
+            meta["jacobian_representation_requested"] = raw_jac_repr or "auto"
+            if raw_jac_repr.replace("_", "-") in {"", "auto"}:
+                meta["jacobian_representation_reason"] = (
+                    "sparse_route_default_linearized"
+                )
+            else:
+                meta["jacobian_representation_reason"] = (
+                    f"sparse_route_forces_linearized_from_{jac_repr}"
+                )
+            jac_repr = "linearized"
     if _is_auto_built_one_step_rm_route(meta):
         meta["rm_build_jacobian_representation"] = "dense"
         meta.setdefault("single_step_context_cache_scope", "process")
@@ -4820,7 +5091,10 @@ def _can_dispatch_single_step_cached(
     method_lc: str,
     runtime_path: str,
 ) -> bool:
-    if method_lc != "gn-difference" or runtime_path != "single_step_cached":
+    if method_lc != "gn-difference" or runtime_path not in {
+        "single_step_cached",
+        "single_step_sparse",
+    }:
         return False
     if str(req.use_part).strip().lower() == "real":
         return True
@@ -4828,7 +5102,8 @@ def _can_dispatch_single_step_cached(
         return False
     meta = dict(req.metadata or {})
     return bool(
-        _single_step_rm_route_requires_artifact(meta)
+        _is_sparse_single_step_route(meta)
+        or _single_step_rm_route_requires_artifact(meta)
         or _should_auto_build_rm_artifact(meta)
         or _should_resolve_greit_registry(meta)
         or _has_explicit_rm_artifact_meta(meta)
@@ -4945,9 +5220,10 @@ def _single_step_cached_solver_diagnostics(
     ctx: dict[str, Any],
     *,
     strict_backend: str,
+    path: str = "single_step_cached",
 ) -> dict[str, Any]:
     return {
-        "path": "single_step_cached",
+        "path": path,
         "strict_solver_backend_effective": strict_backend,
         "runtime": _single_step_runtime_diagnostics(ctx),
         "cache_lookups": dict(ctx.get("cache_lookups", {})),
@@ -5447,6 +5723,9 @@ def _run_single_step_cached_request(
             progress_cb(message)
 
     runtime = _prepare_single_step_cached_runtime(req)
+    sparse_single_step = _is_sparse_single_step_route(runtime.meta)
+    runtime_label = "single_step_sparse" if sparse_single_step else "single_step_cached"
+    diagnostic_path = runtime_label
     if _should_resolve_greit_registry(runtime.meta):
         _ensure_greit_registry_artifact(req, runtime, emit=emit)
     rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
@@ -5476,7 +5755,8 @@ def _run_single_step_cached_request(
     result_meta.update(
         {
             "n_elec": int(meta["n_elec"]),
-            "reconstruction_runtime": "single_step_cached",
+            "reconstruction_runtime": runtime_label,
+            "single_step_route_kind": "sparse" if sparse_single_step else "cached",
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
         }
@@ -5487,6 +5767,7 @@ def _run_single_step_cached_request(
         result_meta["solver_diagnostics"] = _single_step_cached_solver_diagnostics(
             ctx,
             strict_backend="warmup_only",
+            path=diagnostic_path,
         )
         emit("Realtime reconstruction context ready")
         return ReconstructionResult(
@@ -5622,7 +5903,8 @@ def _run_single_step_cached_request(
     result_meta.update(
         {
             "n_elec": int(meta["n_elec"]),
-            "reconstruction_runtime": "single_step_cached",
+            "reconstruction_runtime": runtime_label,
+            "single_step_route_kind": "sparse" if sparse_single_step else "cached",
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
             "conductivity_display_mode": "absolute_sigma",
@@ -5636,6 +5918,7 @@ def _run_single_step_cached_request(
             "solver_diagnostics": _single_step_cached_solver_diagnostics(
                 ctx,
                 strict_backend=strict_backend,
+                path=diagnostic_path,
             ),
         }
     )

@@ -25,6 +25,7 @@ from eit_app.models.frame_model import FrameData
 from eit_app.models.reconstruction_methods import (
     CANONICAL_SINGLE_STEP_LAMBDA_EFF,
     DATABASE_RECONSTRUCTION_METHODS,
+    NOSER_SPARSE_METHOD,
     PSEUDO3D_NOSER_RM_METHOD,
     database_method_uses_iterations,
     prepare_database_reconstruction_method,
@@ -48,11 +49,17 @@ def _select_method(combo, method: str) -> None:
 
 def test_v118_database_method_catalog_exposes_rm_and_absolute_routes() -> None:
     methods = [option.method for option in DATABASE_RECONSTRUCTION_METHODS]
-    assert methods[:3] == ["noser_rm", "laplace_rm", "curvature_rm"]
+    assert methods[:4] == [
+        "noser_rm",
+        NOSER_SPARSE_METHOD,
+        "laplace_rm",
+        "curvature_rm",
+    ]
     assert PSEUDO3D_NOSER_RM_METHOD in methods
     assert "debug_fine_mesh_noser" not in methods
     assert "gn-absolute" in methods
     assert not database_method_uses_iterations("noser_rm")
+    assert not database_method_uses_iterations(NOSER_SPARSE_METHOD)
     assert not database_method_uses_iterations("laplace_rm")
     assert not database_method_uses_iterations("curvature_rm")
     assert database_method_uses_iterations("gn-absolute")
@@ -121,8 +128,37 @@ def test_v118_database_rm_route_prepares_normalized_single_step_request() -> Non
     assert prepared.metadata["simulation_inverse_route"] == "laplace_rm"
     assert prepared.metadata["simulation_inverse_route_kind"] == "rm"
     assert prepared.metadata["rm_regularization"] == "laplace"
-    assert prepared.metadata["rm_form"] == "param"
+    assert prepared.metadata["rm_form"] == "measurement"
     assert prepared.metadata["lambda_eff_custom_enabled"] is False
+    assert prepared.metadata["compute_precision"] == "float32"
+
+
+def test_database_noser_sparse_prepares_matrix_free_single_step_request() -> None:
+    prepared = prepare_database_reconstruction_method(
+        "noser_matrix_free",
+        regularization_alpha=0.25,
+        max_iterations=99,
+        metadata={"compute_precision": "float32"},
+    )
+
+    assert prepared.method == "gn-difference"
+    assert prepared.max_iterations == 1
+    assert prepared.regularization_alpha == pytest.approx(0.25)
+    assert prepared.metadata["difference_mode"] == "normalized"
+    assert prepared.metadata["difference_lambda"] == pytest.approx(0.25)
+    assert prepared.metadata["reconstruction_runtime"] == "single_step_cached"
+    assert prepared.metadata["simulation_inverse_route"] == NOSER_SPARSE_METHOD
+    assert prepared.metadata["simulation_inverse_route_kind"] == "sparse"
+    assert prepared.metadata["rm_route_requires_artifact"] is False
+    assert prepared.metadata["rm_auto_build"] is False
+    assert prepared.metadata["rm_regularization"] == "noser"
+    assert prepared.metadata["jacobian_representation"] == "linearized"
+    assert (
+        prepared.metadata["online_hot_path"] == "single_step_sparse_linearized_solver"
+    )
+    assert prepared.metadata["hyperparameter_effective_source"] == "single_step_sparse"
+    assert prepared.metadata["regularization_alpha_applied"] is True
+    assert prepared.metadata["lambda_eff"] == pytest.approx(0.25)
     assert prepared.metadata["compute_precision"] == "float32"
 
 

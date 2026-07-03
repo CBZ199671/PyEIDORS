@@ -10,6 +10,7 @@ from pyeidors.runtime_paths import pyeidors_cache_path
 
 CANONICAL_SINGLE_STEP_LAMBDA_EFF = 1.0e-2
 CANONICAL_SINGLE_STEP_HP = CANONICAL_SINGLE_STEP_LAMBDA_EFF**0.5
+NOSER_SPARSE_METHOD = "noser_sparse"
 PSEUDO3D_NOSER_RM_METHOD = "pseudo3d_noser_rm"
 
 
@@ -31,6 +32,12 @@ DATABASE_RECONSTRUCTION_METHODS: tuple[ReconstructionMethodOption, ...] = (
         uses_iterations=False,
         locked_lambda_eff=True,
         custom_lambda_eff=True,
+    ),
+    ReconstructionMethodOption(
+        "NOSER Sparse · Difference (matrix-free)",
+        NOSER_SPARSE_METHOD,
+        requires_reference=True,
+        uses_iterations=False,
     ),
     ReconstructionMethodOption(
         "Laplace RM · Difference (smooth)",
@@ -79,6 +86,7 @@ DATABASE_RECONSTRUCTION_METHODS: tuple[ReconstructionMethodOption, ...] = (
 _OPTIONS_BY_METHOD = {opt.method: opt for opt in DATABASE_RECONSTRUCTION_METHODS}
 _ABSOLUTE_METHODS = {"gn-absolute", "sparse-bayes-absolute"}
 _RM_METHODS = {"noser_rm", "laplace_rm", "curvature_rm", PSEUDO3D_NOSER_RM_METHOD}
+_SPARSE_SINGLE_STEP_METHODS = {NOSER_SPARSE_METHOD}
 _LOCKED_LAMBDA_METHODS = _RM_METHODS | {"debug_fine_mesh_noser"}
 _CUSTOM_LAMBDA_METHODS = _RM_METHODS
 _RM_REGULARIZATION = {
@@ -89,8 +97,8 @@ _RM_REGULARIZATION = {
 }
 _RM_FORM = {
     "noser_rm": "measurement",
-    "laplace_rm": "param",
-    "curvature_rm": "param",
+    "laplace_rm": "measurement",
+    "curvature_rm": "measurement",
     PSEUDO3D_NOSER_RM_METHOD: "measurement",
 }
 
@@ -114,6 +122,9 @@ def normalize_database_reconstruction_method(method: str) -> str:
         "gn_absolute": "gn-absolute",
         "absolute_gn": "gn-absolute",
         "noser": "noser_rm",
+        "noser_sparse": NOSER_SPARSE_METHOD,
+        "noser_matrix_free": NOSER_SPARSE_METHOD,
+        "matrix_free_noser": NOSER_SPARSE_METHOD,
         "laplace": "laplace_rm",
         "curvature": "curvature_rm",
         "pseudo3d": PSEUDO3D_NOSER_RM_METHOD,
@@ -273,6 +284,53 @@ def prepare_database_reconstruction_method(
         meta = pseudo3d_noser_rm_metadata(meta)
     alpha_input = float(regularization_alpha)
     max_iter = int(max_iterations)
+
+    if route in _SPARSE_SINGLE_STEP_METHODS:
+        difference_lambda = max(alpha_input, 1.0e-12)
+        meta.update(
+            {
+                "difference_mode": "normalized",
+                "difference_orientation": "target_minus_reference",
+                "difference_preset": "eidors_one_step_noser",
+                "absolute_preset": "eidors_abs_gn",
+                "simulation_inverse_route": route,
+                "simulation_inverse_route_kind": "sparse",
+                "simulation_inverse_debug_route": False,
+                "rm_route_requires_artifact": False,
+                "rm_auto_build": False,
+                "rm_route_pending_task": "",
+                "rm_regularization": "noser",
+                "rm_form": "",
+                "rm_output_display_mode": "absolute_sigma",
+                "rm_artifact_dir": _gui_rm_artifact_dir(),
+                "reconstruction_runtime": "single_step_cached",
+                "jacobian_representation": "linearized",
+                "linearized_solver_strategy": "auto",
+                "linearized_maxiter": 0,
+                "lazy_preconditioner_mode": "auto",
+                "online_hot_path": "single_step_sparse_linearized_solver",
+                "difference_lambda": difference_lambda,
+                "hyperparameter_ui_name": "lambda_eff",
+                "hyperparameter_ui_value": difference_lambda,
+                "hyperparameter_ui_locked": False,
+                "hyperparameter_effective_source": "single_step_sparse",
+                "hyperparameter_formula": "JtJ_plus_lambda_noser_diag",
+                "hyperparameter_diagnostic": "single_step_sparse_linearized_solve",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": True,
+                "lambda_eff": difference_lambda,
+                "lambda_eff_custom_enabled": False,
+                "hp": float(difference_lambda**0.5),
+                "hp_squared": difference_lambda,
+                "difference_lambda_semantics": "single_step_sparse_lambda_eff",
+            }
+        )
+        return PreparedReconstructionMethod(
+            method="gn-difference",
+            regularization_alpha=difference_lambda,
+            max_iterations=1,
+            metadata=meta,
+        )
 
     if route in _RM_METHODS:
         custom_lambda = bool(custom_lambda_eff_enabled)

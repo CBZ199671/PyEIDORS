@@ -4077,8 +4077,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
     assert request.metadata["rm_output_display_mode"] == display_mode
     if method in {"noser_rm", "laplace_rm", "curvature_rm"}:
         assert request.metadata["difference_mode"] == "normalized"
-        expected_form = "measurement" if method == "noser_rm" else "param"
-        assert request.metadata["rm_form"] == expected_form
+        assert request.metadata["rm_form"] == "measurement"
         assert request.metadata["rm_inverse_mesh_size"] <= request.metadata["mesh_size"]
         assert request.metadata["rm_artifact_dir"] == str(pyeidors_cache_path("gui_rm"))
         assert request.regularization_alpha == pytest.approx(1.0e-2)
@@ -4131,6 +4130,60 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["difference_lambda_semantics"] == (
             "unused_for_greit_artifact"
         )
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_noser_sparse_records_matrix_free_single_step_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "noser_sparse",
+            "regularization_alpha": 0.25,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert _wait_until(lambda: captured, timeout=5.0)
+    request = captured[0]
+    assert request.method == "gn-difference"
+    assert request.regularization_alpha == pytest.approx(0.25)
+    assert request.metadata["reconstruction_runtime"] == "single_step_cached"
+    assert request.metadata["simulation_inverse_route"] == "noser_sparse"
+    assert request.metadata["simulation_inverse_route_kind"] == "sparse"
+    assert request.metadata["rm_route_requires_artifact"] is False
+    assert request.metadata["rm_auto_build"] is False
+    assert request.metadata["rm_regularization"] == "noser"
+    assert request.metadata["difference_preset"] == "eidors_one_step_noser"
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["difference_lambda"] == pytest.approx(0.25)
+    assert request.metadata["jacobian_representation"] == "linearized"
+    assert request.metadata["online_hot_path"] == "single_step_sparse_linearized_solver"
+    assert request.metadata["hyperparameter_effective_source"] == "single_step_sparse"
 
     window._sim_state.inverse_running = False
     _close_window(window)

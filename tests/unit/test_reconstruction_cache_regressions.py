@@ -916,6 +916,49 @@ def test_single_step_cached_runtime_keeps_large_3d_auto_on_dense_jacobian() -> N
     assert runtime.meta["jacobian_representation_reason"] == "auto_dense_large_or_non3d"
 
 
+def test_single_step_sparse_runtime_forces_linearized_without_rm_artifact() -> None:
+    large_ref = FrameData(
+        real=np.ones(5936, dtype=float),
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    large_tgt = FrameData(
+        real=np.ones(5936, dtype=float) * 1.001,
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=1,
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=large_ref,
+        target_frame=large_tgt,
+        mesh_dimension=3,
+        mesh_refinement=0.1,
+        metadata={
+            "mesh_dimension": 3,
+            "mesh_size": 0.1,
+            "n_elec": 16,
+            "n_rings": 3,
+            "simulation_inverse_route": "noser_sparse",
+            "simulation_inverse_route_kind": "sparse",
+            "jacobian_representation": "auto",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.meta["jacobian_representation"] == "linearized"
+    assert runtime.meta["jacobian_representation_reason"] == (
+        "sparse_route_default_linearized"
+    )
+    assert runtime.meta["rm_route_requires_artifact"] is False
+    assert runtime.meta["rm_auto_build"] is False
+    assert runtime.meta["single_step_sparse_solver"] is True
+    assert runtime.meta["online_hot_path"] == "single_step_sparse_linearized_solver"
+
+
 def test_single_step_cached_runtime_uses_request_alpha_when_lambda_is_absent() -> None:
     request = rc.ReconstructionRequest(
         reference_frame=_make_frame(0),
@@ -1354,17 +1397,21 @@ def test_smooth_rm_signature_tracks_graph_prior_semantics_not_storage_axes() -> 
         laplace_payload["hyperparameters"]["rm_jacobian_build_representation"]
         == "dense"
     )
-    assert laplace_payload["hyperparameters"]["form"] == "param"
+    assert laplace_payload["hyperparameters"]["form"] == "measurement"
     assert (
         laplace_payload["hyperparameters"]["singular_prior_form_policy"]
-        == "param_for_graph_laplace_curvature_v1"
+        == "measurement_prior_auto_ridge_v1"
+    )
+    assert (
+        laplace_payload["hyperparameters"]["measurement_prior_inverse_policy"]
+        == "auto_sparse_or_diagonal_ridge_v1"
     )
     assert (
         laplace_payload["hyperparameters"]["rm_algorithm_version"]
         == rc._ONE_STEP_RM_ALGORITHM_VERSION
     )
     assert curvature_payload["regularization_type"] == "curvature"
-    assert curvature_payload["hyperparameters"]["form"] == "param"
+    assert curvature_payload["hyperparameters"]["form"] == "measurement"
     assert (
         curvature_payload["hyperparameters"]["prior_operator"]
         == "eidors_prior_laplace_squared"
@@ -1724,6 +1771,55 @@ def test_run_reconstruction_request_dispatches_complex_rm_to_single_step_cached(
     assert result is sentinel
 
 
+def test_run_reconstruction_request_dispatches_complex_sparse_to_single_step_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0], dtype=np.float32),
+            imag=np.array([0.10, 0.20], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([1.5, 2.5], dtype=np.float32),
+            imag=np.array([0.30, 0.50], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_sparse",
+            "simulation_inverse_route_kind": "sparse",
+            "background_conductivity": "1+2j",
+            "contact_impedance": "0.01+0.05j",
+            "compute_dtype": "complex64",
+        },
+    )
+    sentinel = rc.ReconstructionResult(
+        conductivity=np.array([1.0 + 2.0j], dtype=np.complex64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=int),
+        metadata={"reconstruction_runtime": "single_step_sparse"},
+    )
+
+    monkeypatch.setattr(
+        rc,
+        "_run_single_step_cached_request",
+        lambda req, progress_cb=None: sentinel,
+    )
+
+    def _unexpected_full(*_args, **_kwargs):
+        raise AssertionError("complex sparse requests must use the single-step path")
+
+    monkeypatch.setattr(rc, "_run_full_gn_request", _unexpected_full)
+
+    result = rc.run_reconstruction_request(request)
+
+    assert result is sentinel
+
+
 def test_v134_complex_rm_route_uses_one_step_rm_fast_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2016,6 +2112,122 @@ def test_single_step_cached_request_uses_normalized_difference_space(
     assert np.allclose(captured_rhs[0], expected_measured)
     assert np.allclose(result.measured, expected_measured)
     assert np.allclose(result.simulated, expected_simulated)
+
+
+def test_single_step_sparse_request_uses_linearized_operator_without_rm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array([2.0, 4.0, -8.0], dtype=float)
+    target = np.array([3.0, 2.0, -4.0], dtype=float)
+    base_meas = reference.copy()
+    pred_target = np.array([2.5, 5.0, -12.0], dtype=float)
+    delta_sigma = np.array([0.2, -0.1], dtype=float)
+    captured_rhs: list[np.ndarray] = []
+    measurement_backend = "measurement-exact"
+
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_sparse",
+            "simulation_inverse_route_kind": "sparse",
+            "difference_mode": "normalized",
+            "difference_orientation": "target_minus_reference",
+            "step_size_calib": False,
+            "jacobian_representation": "auto",
+            "rm_auto_build": True,
+            "rm_route_requires_artifact": True,
+        },
+    )
+
+    class _StubForwardModel:
+        def fwd_solve(self, image):
+            assert image.elem_data is not None
+            return SimpleNamespace(meas=pred_target), None
+
+    mesh = SimpleNamespace(
+        coordinates=lambda: np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        cells=lambda: np.array([[0, 1, 2]], dtype=int),
+    )
+    ctx = {
+        "mesh": mesh,
+        "display_node_coords": mesh.coordinates(),
+        "display_cell_connectivity": mesh.cells(),
+        "operator_bundle": {
+            "jacobian_representation": "linearized",
+            "strict_solver_backend_effective": "linearized",
+        },
+        "sigma_bg": np.ones_like(delta_sigma),
+        "fwd_model": _StubForwardModel(),
+        "base_meas": base_meas,
+        "cache_build_seconds": {},
+        "cache_miss_reasons": {},
+        "cache_manager": None,
+    }
+
+    def _fake_linearized_delta(*, operator_bundle, rhs):
+        assert operator_bundle["jacobian_representation"] == "linearized"
+        captured_rhs.append(np.asarray(rhs, dtype=float))
+        return delta_sigma
+
+    def _unexpected_rm_build(*_args, **_kwargs):
+        raise AssertionError("sparse route must not auto-build an RM artifact")
+
+    def _unexpected_measurement_delta(*_args, **_kwargs):
+        raise AssertionError("sparse route must not fall back to measurement-space RM")
+
+    def _unexpected_dense_solve(*_args, **_kwargs):
+        raise AssertionError("sparse route must not fall back to dense parameter solve")
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: ctx)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(
+        rc,
+        "_ensure_auto_built_one_step_rm_artifact",
+        _unexpected_rm_build,
+    )
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(
+            STRICT_SOLVER_BACKEND_MEASUREMENT=measurement_backend,
+            _measurement_space_delta=_unexpected_measurement_delta,
+            _solve_linear_from_bundle=_unexpected_dense_solve,
+            _solve_linearized_delta=_fake_linearized_delta,
+            _calibrate_step_size=lambda **kwargs: 1.0,
+            build_shared_context=lambda **kwargs: ctx,
+        ),
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_measured = (target - reference) / reference
+    expected_simulated = (pred_target - base_meas) / base_meas
+    assert np.allclose(captured_rhs[0], expected_measured)
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + delta_sigma)
+    assert np.allclose(result.measured, expected_measured)
+    assert np.allclose(result.simulated, expected_simulated)
+    assert result.metadata["reconstruction_runtime"] == "single_step_sparse"
+    assert result.metadata["single_step_route_kind"] == "sparse"
+    assert result.metadata["single_step_operator_space"] == "linearized"
+    assert result.metadata["jacobian_representation"] == "linearized"
+    assert result.metadata["rm_auto_build"] is False
+    assert result.metadata["rm_route_requires_artifact"] is False
+    assert result.metadata["solver_diagnostics"]["path"] == "single_step_sparse"
 
 
 def test_single_step_cached_request_uses_rm_artifact_hot_path(
@@ -2493,7 +2705,7 @@ def test_single_step_cached_auto_built_rm_rebuilds_stale_fitless_artifact(
     assert context_calls["count"] == 1
 
 
-def test_single_step_cached_auto_built_rm_skips_oversize_fit_jacobian_without_rebuild(
+def test_single_step_cached_oversize_fit_jacobian_uses_fit_matrix_without_rebuild(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2563,6 +2775,8 @@ def test_single_step_cached_auto_built_rm_skips_oversize_fit_jacobian_without_re
         mode="noser",
         form="measurement",
     )
+    expected_dv = target - reference
+    fit_matrix = jacobian @ rm
     write_rm_artifact(
         artifact_path,
         rm,
@@ -2574,14 +2788,17 @@ def test_single_step_cached_auto_built_rm_skips_oversize_fit_jacobian_without_re
         node_coords=node_coords,
         cell_connectivity=cells,
         jacobian=jacobian,
+        fit_matrix=fit_matrix,
     )
 
     result = rc._run_single_step_cached_request(request)
 
-    expected_sigma = 1.0 + rm @ (target - reference)
+    expected_sigma = 1.0 + rm @ expected_dv
     np.testing.assert_allclose(result.conductivity, expected_sigma)
-    assert result.simulated is None
+    np.testing.assert_allclose(result.simulated, fit_matrix @ expected_dv)
     assert result.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert result.metadata["rm_fit_source"] == "rm_fit_matrix"
+    assert result.metadata["rm_fit_matrix_cache_status"] == "hit"
     assert result.metadata["rm_fit_jacobian_cache_status"] == "artifact_too_large"
     assert result.metadata["rm_fit_jacobian_available_but_skipped"] is True
     assert result.metadata["rm_fit_jacobian_bytes"] == jacobian.nbytes
@@ -2593,6 +2810,7 @@ def test_auto_build_skips_persisting_oversize_fit_jacobian_and_warm_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import h5py
+    from pyeidors.inverse import build_one_step_rm
 
     with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
         rc._RM_FIT_JACOBIAN_CACHE.clear()
@@ -2663,17 +2881,34 @@ def test_auto_build_skips_persisting_oversize_fit_jacobian_and_warm_hits(
         },
     )
 
+    expected_dv = target - reference
+    expected_rm = build_one_step_rm(
+        jacobian,
+        lambda_=0.2,
+        mode="noser",
+        form="measurement",
+    )
+    expected_fit_matrix = jacobian @ expected_rm
     first = rc._run_single_step_cached_request(request)
     artifact_path = Path(first.metadata["rm_artifact_path"])
+    expected_delta = first.conductivity - 1.0
 
-    assert first.simulated is None
+    np.testing.assert_allclose(first.simulated, expected_fit_matrix @ expected_dv)
+    np.testing.assert_allclose(first.simulated, jacobian @ expected_delta)
+    assert first.metadata["rm_fit_source"] == "rm_fit_matrix"
+    assert first.metadata["rm_fit_matrix_cache_status"] == "hit"
     assert first.metadata["rm_fit_jacobian_available_but_skipped"] is True
     assert first.metadata["rm_fit_jacobian_bytes"] == jacobian.nbytes
     with h5py.File(artifact_path, "r") as handle:
         assert "jacobian" not in handle["arrays"]
+        assert "fit_matrix" in handle["arrays"]
+        np.testing.assert_allclose(
+            handle["arrays"]["fit_matrix"][()], expected_fit_matrix
+        )
         metadata = handle.attrs["metadata_json"]
         assert '"fit_jacobian_persisted": false' in str(metadata)
         assert '"fit_jacobian_persist_skip_reason": "too_large"' in str(metadata)
+        assert '"fit_matrix_persisted": true' in str(metadata)
 
     monkeypatch.setattr(
         rc,
@@ -2682,8 +2917,11 @@ def test_auto_build_skips_persisting_oversize_fit_jacobian_and_warm_hits(
     )
     warm = rc._run_single_step_cached_request(request)
 
-    assert warm.simulated is None
+    np.testing.assert_allclose(warm.simulated, expected_fit_matrix @ expected_dv)
+    np.testing.assert_allclose(warm.simulated, jacobian @ expected_delta)
     assert warm.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert warm.metadata["rm_fit_source"] == "rm_fit_matrix"
+    assert warm.metadata["rm_fit_matrix_cache_status"] == "hit"
     assert warm.metadata["rm_fit_jacobian_cache_status"] == "artifact_too_large"
     assert context_calls["count"] == 1
 
@@ -3070,7 +3308,7 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
         regularization=regularization,
         lambda_=0.5,
         mode=mode,
-        form="param",
+        form="measurement",
     )
     expected_delta = expected_rm @ (target - reference)
     np.testing.assert_allclose(result.conductivity, 1.0 + expected_delta)
@@ -3082,8 +3320,8 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     delta = result.conductivity - 1.0
     assert delta[1:3].mean() > delta[[0, 3]].mean()
     if route == "laplace_rm":
-        assert abs(delta[1] - delta[2]) <= 1.0e-12
-        assert abs(delta[0] - delta[3]) <= 1.0e-12
+        assert abs(delta[1] - delta[2]) <= 1.0e-8
+        assert abs(delta[0] - delta[3]) <= 1.0e-8
     else:
         assert np.isfinite(delta).all()
 
@@ -3095,7 +3333,9 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     assert diagnostics["rm_metadata"]["regularization_type"] == mode
     assert diagnostics["rm_metadata"]["regularization_source"] == expected_source
     assert diagnostics["rm_metadata"]["RtR_signature_hash"]
-    assert diagnostics["rm_metadata"]["form"] == "param"
+    assert diagnostics["rm_metadata"]["form"] == "measurement"
+    assert diagnostics["rm_metadata"]["prior_inverse_solver"] == "sparse_lu_ridge"
+    assert diagnostics["rm_metadata"]["measurement_prior_ridge"] > 0.0
 
     warm = rc._run_single_step_cached_request(request)
     np.testing.assert_allclose(warm.conductivity, result.conductivity)
@@ -3296,7 +3536,7 @@ def test_single_step_cached_3d_rm_auto_build_forces_dense_jacobian_context(
         regularization=graph_laplacian(inverse_mesh),
         lambda_=0.2,
         mode="laplace",
-        form="param",
+        form="measurement",
     )
     expected_delta = expected_rm @ (target - reference)
     np.testing.assert_allclose(result.conductivity, 1.0 + expected_delta)
