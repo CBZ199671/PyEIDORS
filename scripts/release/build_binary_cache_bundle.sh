@@ -201,7 +201,61 @@ cat > "$BUNDLE_DIR/README_FAST_INSTALL.zh.md" <<EOF
 
 ## 用户安装步骤
 
-先安装 Nix，并启用 flakes。然后在本目录运行：
+### 0. 先安装系统前置依赖
+
+Windows 用户推荐先安装 WSL2 Ubuntu，然后在 Ubuntu 里执行后续命令。不要在 WSL1 或 Windows 原生 PowerShell 里直接运行本包。
+
+Ubuntu/WSL2：
+
+\`\`\`bash
+sudo apt update
+sudo apt install -y curl ca-certificates xz-utils unzip zstd
+\`\`\`
+
+Fedora：
+
+\`\`\`bash
+sudo dnf install -y curl ca-certificates xz unzip zstd
+\`\`\`
+
+Arch Linux：
+
+\`\`\`bash
+sudo pacman -S --needed curl ca-certificates xz unzip zstd
+\`\`\`
+
+安装 Nix：
+
+\`\`\`bash
+curl -L https://nixos.org/nix/install | sh -s -- --daemon
+\`\`\`
+
+如果安装器提示当前环境不能使用 daemon 或 systemd，改用：
+
+\`\`\`bash
+curl -L https://nixos.org/nix/install | sh -s -- --no-daemon
+\`\`\`
+
+重新打开终端后启用 flakes：
+
+\`\`\`bash
+mkdir -p ~/.config/nix
+grep -q "experimental-features" ~/.config/nix/nix.conf 2>/dev/null || \\
+  printf "experimental-features = nix-command flakes\\n" >> ~/.config/nix/nix.conf
+nix --version
+\`\`\`
+
+GPU 用户还需要确认 Linux/WSL2 中能看到 NVIDIA 驱动：
+
+\`\`\`bash
+nvidia-smi
+\`\`\`
+
+GTX 1660 属于当前预编译 GPU 包支持范围，可以使用 GPU 入口。GTX 1050 Ti 不在当前预编译 GPU 包范围内，请使用 CPU 入口。
+
+### 1. 导入本地 binary cache
+
+进入本目录运行：
 
 \`\`\`bash
 bash install-from-local-cache.sh
@@ -213,7 +267,7 @@ bash install-from-local-cache.sh
 extra-trusted-public-keys = $(cat "$PUBLIC_KEY_FILE")
 \`\`\`
 
-导入完成后解压源码包：
+### 2. 解压源码包
 
 \`\`\`bash
 mkdir -p ~/apps
@@ -222,19 +276,23 @@ unzip /path/to/$BUNDLE_NAME/PyEIDORS-$VERSION-pure-nix-source.zip
 cd PyEIDORS-$VERSION
 \`\`\`
 
-CPU 用户启动：
+### 3. 启动 GUI
+
+CPU 用户、无 NVIDIA GPU 用户、GTX 1050 Ti 用户：
 
 \`\`\`bash
 nix run .#eit-app-complex64
 \`\`\`
 
-GPU 用户启动：
+GTX 1660 或其他受支持 NVIDIA GPU 用户：
 
 \`\`\`bash
 nix run .#eit-app-complex64-cuda
 \`\`\`
 
 如果仍然发生少量构建，通常只是当前源码包路径导致的很小顶层 wrapper 重建；重型依赖应当已经从本地 cache 导入，不应重新编译 CUDA/PETSc/PyTorch/VTK 这类大包。
+
+更多细节请读解压后源码目录里的 INSTALL.zh.md。
 EOF
 
 cat > "$BUNDLE_DIR/manifest.json" <<EOF

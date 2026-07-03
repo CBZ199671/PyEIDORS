@@ -18,14 +18,37 @@ PyEIDORS-2.0.0-fast-install-x86_64-linux.SHA256SUMS.txt
 
 请优先使用这个快速安装包。它包含 source zip、发布者已经编译好的 Nix binary cache，以及用于校验这个 cache 的公开签名 key，能避免用户第一次运行时长时间编译 CUDA/PETSc/PyTorch/VTK 等大依赖。
 
+## 安装前先准备什么
+
+所有用户都需要准备：
+
+- 一台 x86_64 Linux 机器，或 Windows 11/Windows 10 + WSL2 Ubuntu。Windows 原生 `.exe` 不是当前主路线。
+- 可用的网络连接，用于安装 Nix、首次解析 flake，或在没有本地 binary cache 时下载依赖。
+- 至少几十 GB 可用磁盘空间；GPU 路线和本地 binary cache 闭包更大，建议预留 80 GB 以上。
+- 基础命令行工具：`curl`、`ca-certificates`、`unzip`、`zstd`。Ubuntu/WSL2 用户可直接运行本文后面的 `apt install` 命令。
+- Nix，并启用 `nix-command flakes`。不需要安装 Python、uv、pip、FEniCSx、PETSc、CUDA Toolkit、PyTorch 或 Qt；这些由 Nix 包提供。
+
+Windows + WSL2 用户额外需要：
+
+- WSL2 Ubuntu，推荐 Ubuntu 22.04 或更新版本。不要用 WSL1。
+- 如果要显示 GUI，需要 Windows 自带 WSLg 可用；执行 `echo "$DISPLAY"` 或 `echo "$WAYLAND_DISPLAY"` 时至少有一个不为空。
+- 如果要跑 GPU 版，需要 Windows 侧安装较新的 NVIDIA 驱动，并且在 WSL2 Ubuntu 中 `nvidia-smi` 可运行。
+
+GPU 用户额外需要：
+
+- NVIDIA 显卡和可用驱动。Linux/WSL2 里必须能看到 `nvidia-smi`。
+- 当前预编译 GPU 包使用 CUDA 12.8.1，编译目标为 `sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120`，并包含 `compute_120` PTX。
+- GTX 1660 属于 `sm_75`，可以使用当前 GPU 包。
+- GTX 1050 Ti 属于 `sm_61`，当前预编译 GPU 包不支持；请使用 CPU 通用入口 `nix run .#eit-app-complex64`。
+
 ## 先选运行路线
 
 推荐先按有没有 NVIDIA GPU 选择入口：
 
 | 使用场景 | 推荐启动命令 | 说明 |
 |---|---|---|
-| 没有 NVIDIA GPU，或暂时只想稳定运行 | `nix run .#eit-app-complex64` | 推荐 CPU 通用入口。可以处理复值问题；如果任务输出是纯实值，GUI 后端会转到实值 worker 以节省内存。 |
-| 有 NVIDIA GPU，并且 `nvidia-smi` 可用 | `nix run .#eit-app-complex64-cuda` | 推荐 GPU 通用入口。可以处理复值 CUDA 路线；纯实值任务会尽量走实值 worker。 |
+| 没有 NVIDIA GPU、显卡不在当前 GPU 包范围内，或暂时只想稳定运行 | `nix run .#eit-app-complex64` | 推荐 CPU 通用入口。可以处理复值问题；如果任务输出是纯实值，GUI 后端会转到实值 worker 以节省内存。GTX 1050 Ti 用户走这条。 |
+| 有受支持的 NVIDIA GPU，并且 `nvidia-smi` 可用 | `nix run .#eit-app-complex64-cuda` | 推荐 GPU 通用入口。可以处理复值 CUDA 路线；纯实值任务会尽量走实值 worker。GTX 1660 用户可走这条。 |
 | 只做实值 CPU | `nix run .#eit-app-real-cpu` | 运行闭包更小，但不适合复导纳问题。 |
 | 只做实值 GPU | `nix run .#eit-app-real-gpu` | 需要可用 NVIDIA 驱动。 |
 | 需要更高精度复值 CPU | `nix run .#eit-app-complex128-cpu` | complex128，内存占用更高。 |
@@ -88,7 +111,7 @@ wsl -d Ubuntu-22.04
 
 ```bash
 sudo apt update
-sudo apt install -y curl ca-certificates xz-utils unzip
+sudo apt install -y curl ca-certificates xz-utils unzip zstd
 ```
 
 优先安装 multi-user Nix：
@@ -132,19 +155,19 @@ Debian/Ubuntu：
 
 ```bash
 sudo apt update
-sudo apt install -y curl ca-certificates xz-utils unzip
+sudo apt install -y curl ca-certificates xz-utils unzip zstd
 ```
 
 Fedora：
 
 ```bash
-sudo dnf install -y curl ca-certificates xz unzip
+sudo dnf install -y curl ca-certificates xz unzip zstd
 ```
 
 Arch Linux：
 
 ```bash
-sudo pacman -S --needed curl ca-certificates xz unzip
+sudo pacman -S --needed curl ca-certificates xz unzip zstd
 ```
 
 优先安装 multi-user Nix：
