@@ -76,6 +76,29 @@ def test_v136_real_3d_forward_routes_from_complex_gui_to_real_cuda_worker(
     assert route.reason.startswith("real_input_uses_real_amgx_petsc_runtime")
 
 
+def test_sm61_real_3d_forward_routes_to_legacy_cuda_worker(monkeypatch) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda-sm61")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        mesh_refinement=0.1,
+        background_conductivity=1.0,
+        inhomogeneities=[InhomogeneitySpec(conductivity=2.0)],
+        forward_model_config={
+            "mesh_dimension": 3,
+            "mesh_refinement": 0.1,
+            "background_conductivity": 1.0,
+            "acceleration_profile": "default",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "cuda-sm61"
+    assert route.external is True
+    assert route.reason.startswith("real_input_uses_real_cuda_petsc_runtime")
+
+
 def test_v136_complex_3d_forward_uses_current_profile_inprocess(monkeypatch) -> None:
     monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
     monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
@@ -91,6 +114,27 @@ def test_v136_complex_3d_forward_uses_current_profile_inprocess(monkeypatch) -> 
     route = select_forward_backend_route(request)
 
     assert route.profile == "complex64-cuda"
+    assert route.external is False
+    assert "target_profile_matches_current_runtime" in route.reason
+
+
+def test_sm61_complex_3d_forward_uses_current_profile_inprocess(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda-sm61")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        background_conductivity=1.0 + 0.2j,
+        forward_model_config={
+            "mesh_dimension": 3,
+            "background_conductivity": "1+0.2j",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "complex64-cuda-sm61"
     assert route.external is False
     assert "target_profile_matches_current_runtime" in route.reason
 
@@ -2297,6 +2341,19 @@ def test_v666_backend_worker_env_marks_cuda_amgx_as_gpu(monkeypatch, tmp_path):
     assert cache.profile == "cuda-amgx"
     assert env["EIT_APP_GUI_RUNTIME_PROFILE"] == "cuda-amgx"
     assert env["EIT_APP_GUI_PROFILE"] == "gpu"
+
+
+def test_sm61_backend_worker_env_marks_legacy_cuda_as_gpu(monkeypatch, tmp_path):
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    env, cache = backend_worker_env(repo=repo, profile="complex64-cuda-sm61")
+
+    assert cache.profile == "complex64-cuda-sm61"
+    assert env["EIT_APP_GUI_RUNTIME_PROFILE"] == "complex64-cuda-sm61"
+    assert env["EIT_APP_GUI_PROFILE"] == "gpu"
+    assert env["EIT_APP_GUI_PRECISION"] == "complex64"
 
 
 def test_v590_backend_worker_jit_cleanup_indexes_compiled_modules(tmp_path) -> None:

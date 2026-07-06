@@ -93,6 +93,23 @@ def test_v624_complex_nix_apps_expose_real_worker_profile_commands():
     assert "backendWorkerCommands = {\n              default = pyeidors;" in cuda_block
 
 
+def test_sm61_legacy_cuda_package_is_separate_from_default_cuda_route():
+    text = _flake_text()
+
+    assert "pkgsCudaSm61 = if linuxCudaSupported then mkCudaPkgs {" in text
+    assert 'cudaCapabilities = [ "6.1" ];' in text
+    assert "cudaForwardCompat = false;" in text
+    assert "cudaPackages = prev.cudaPackages.overrideScope" in text
+    assert "badPlatforms = [ ];" in text
+    assert "pyeidors-cuda-sm61 = pyeidorsCudaSm61;" in text
+    assert "pyeidors-complex64-cuda-sm61 = pyeidorsComplex64CudaSm61;" in text
+    assert 'profile = "cuda-sm61";' in text
+    assert 'profile = "complex64-cuda-sm61";' in text
+    assert 'eit-app-complex64-cuda-sm61 = mkApp "pyeidors-complex64-cuda-sm61"' in text
+    assert 'eit-app-legacy-gpu = mkApp "pyeidors-complex64-cuda-sm61"' in text
+    assert "pyeidors-complex64-cuda = pyeidorsComplex64Cuda;" in text
+
+
 def test_cuda_amgx_profile_is_explicit_real_double_nix_route():
     text = _flake_text()
 

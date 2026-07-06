@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 1,
+  "backendName": "PyEIDORS",
+  "backendVersion": "2.0.0",
+  "protocol": "json-lines+hdf5",
+  "defaultProfile": "complex64",
+  "normalRuntime": "nix-run-app",
+  "developmentRuntime": "nix develop .#complex64 -c eit-backend-worker serve",
+  "developmentRuntimeAllowed": false,
+  "profiles": {
+    "default": {
+      "displayName": "实值 CPU",
+      "description": "CPU real-valued float64 runtime for external GUI backend calls",
+      "packageAttr": "pyeidors",
+      "workerApp": "eit-backend-worker-real-cpu",
+      "doctorApp": "eit-backend-doctor-real-cpu",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-real-cpu -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-real-cpu -- --profile default --format json",
+      "scalar": "real",
+      "precision": "float64",
+      "accelerator": "cpu",
+      "requiresGpu": false,
+      "requiresAmgx": false
+    },
+    "complex64": {
+      "displayName": "复值 CPU · complex64",
+      "description": "CPU complex64 runtime for external GUI backend calls",
+      "packageAttr": "pyeidors-complex64",
+      "workerApp": "eit-backend-worker-complex64",
+      "doctorApp": "eit-backend-doctor-complex64",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex64 -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex64 -- --profile complex64 --format json",
+      "scalar": "complex",
+      "precision": "complex64",
+      "accelerator": "cpu",
+      "requiresGpu": false,
+      "requiresAmgx": false
+    },
+    "complex": {
+      "displayName": "复值 CPU · complex128",
+      "description": "CPU complex128 runtime for external GUI backend calls",
+      "packageAttr": "pyeidors-complex",
+      "workerApp": "eit-backend-worker-complex128-cpu",
+      "doctorApp": "eit-backend-doctor-complex128-cpu",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex128-cpu -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex128-cpu -- --profile complex --format json",
+      "scalar": "complex",
+      "precision": "complex128",
+      "accelerator": "cpu",
+      "requiresGpu": false,
+      "requiresAmgx": false
+    },
+    "cuda": {
+      "displayName": "实值 GPU/CUDA",
+      "description": "CUDA real-valued float64 runtime for supported NVIDIA GPUs",
+      "packageAttr": "pyeidors-cuda",
+      "workerApp": "eit-backend-worker-real-gpu",
+      "doctorApp": "eit-backend-doctor-real-gpu",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-real-gpu -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-real-gpu -- --profile cuda --require-gpu --format json",
+      "scalar": "real",
+      "precision": "float64",
+      "accelerator": "cuda",
+      "requiresGpu": true,
+      "requiresAmgx": false,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61"
+      }
+    },
+    "cuda-amgx": {
+      "displayName": "实值 GPU/CUDA · AMGX",
+      "description": "CUDA real-valued AMGX runtime for supported NVIDIA GPUs",
+      "packageAttr": "pyeidors-cuda-amgx",
+      "workerApp": "eit-backend-worker-cuda-amgx",
+      "doctorApp": "eit-backend-doctor-cuda-amgx",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-cuda-amgx -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-cuda-amgx -- --profile cuda-amgx --require-gpu --require-amgx --format json",
+      "scalar": "real",
+      "precision": "float64",
+      "accelerator": "cuda-amgx",
+      "requiresGpu": true,
+      "requiresAmgx": true,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61"
+      }
+    },
+    "complex64-cuda": {
+      "displayName": "复值 GPU/CUDA · complex64",
+      "description": "CUDA complex64 runtime for supported NVIDIA GPUs",
+      "packageAttr": "pyeidors-complex64-cuda",
+      "workerApp": "eit-backend-worker-complex64-cuda",
+      "doctorApp": "eit-backend-doctor-complex64-cuda",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex64-cuda -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex64-cuda -- --profile complex64-cuda --require-gpu --format json",
+      "scalar": "complex",
+      "precision": "complex64",
+      "accelerator": "cuda",
+      "requiresGpu": true,
+      "requiresAmgx": false,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61"
+      }
+    },
+    "complex-cuda": {
+      "displayName": "复值 GPU/CUDA · complex128",
+      "description": "CUDA complex128 runtime for supported NVIDIA GPUs",
+      "packageAttr": "pyeidors-complex-cuda",
+      "workerApp": "eit-backend-worker-complex128-gpu",
+      "doctorApp": "eit-backend-doctor-complex128-gpu",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex128-gpu -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex128-gpu -- --profile complex-cuda --require-gpu --format json",
+      "scalar": "complex",
+      "precision": "complex128",
+      "accelerator": "cuda",
+      "requiresGpu": true,
+      "requiresAmgx": false,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61"
+      }
+    },
+    "complex-cuda-amgx": {
+      "displayName": "复值 GPU/CUDA · complex128 AMGX",
+      "description": "Experimental CUDA complex128 AMGX runtime for supported NVIDIA GPUs",
+      "packageAttr": "pyeidors-complex-cuda-amgx",
+      "workerApp": "eit-backend-worker-complex128-gpu-amgx",
+      "doctorApp": "eit-backend-doctor-complex128-gpu-amgx",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex128-gpu-amgx -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex128-gpu-amgx -- --profile complex-cuda-amgx --require-gpu --require-amgx --format json",
+      "scalar": "complex",
+      "precision": "complex128",
+      "accelerator": "cuda-amgx",
+      "requiresGpu": true,
+      "requiresAmgx": true,
+      "experimental": true,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61"
+      }
+    },
+    "cuda-sm61": {
+      "displayName": "实值 GPU/CUDA · sm61 legacy",
+      "description": "Legacy sm_61 CUDA real-valued runtime for GTX 10-series Pascal GPUs",
+      "packageAttr": "pyeidors-cuda-sm61",
+      "workerApp": "eit-backend-worker-real-gpu-sm61",
+      "doctorApp": "eit-backend-doctor-real-gpu-sm61",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-real-gpu-sm61 -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-real-gpu-sm61 -- --profile cuda-sm61 --require-gpu --format json",
+      "scalar": "real",
+      "precision": "float64",
+      "accelerator": "cuda",
+      "requiresGpu": true,
+      "requiresAmgx": false,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61",
+        "computeCapability": "6.1"
+      }
+    },
+    "complex64-cuda-sm61": {
+      "displayName": "复值 GPU/CUDA · complex64 sm61 legacy",
+      "description": "Legacy sm_61 CUDA complex64 runtime for GTX 10-series Pascal GPUs",
+      "packageAttr": "pyeidors-complex64-cuda-sm61",
+      "workerApp": "eit-backend-worker-complex64-cuda-sm61",
+      "doctorApp": "eit-backend-doctor-complex64-cuda-sm61",
+      "workerLaunchCommand": "nix run .#eit-backend-worker-complex64-cuda-sm61 -- serve",
+      "doctorCommand": "nix run .#eit-backend-doctor-complex64-cuda-sm61 -- --profile complex64-cuda-sm61 --require-gpu --format json",
+      "scalar": "complex",
+      "precision": "complex64",
+      "accelerator": "cuda",
+      "requiresGpu": true,
+      "requiresAmgx": false,
+      "cuda": {
+        "toolkitVersion": "12.8.1",
+        "minLinuxDriver": "570.124.06",
+        "minWindowsDriver": "572.61",
+        "computeCapability": "6.1"
+      }
+    }
+  },
+  "capabilities": [
+    "serve",
+    "reconstruct",
+    "noser_rm",
+    "laplace_rm",
+    "curvature_rm",
+    "doctor"
+  ]
+}

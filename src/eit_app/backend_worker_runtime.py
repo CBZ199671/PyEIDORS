@@ -390,19 +390,23 @@ def backend_worker_env(
     env["EIT_APP_GUI_RUNTIME_PROFILE"] = cache.profile
     gpu_profiles = {
         "cuda",
+        "cuda-sm61",
         "cuda-amgx",
         "complex-cuda",
         "complex64-cuda",
+        "complex64-cuda-sm61",
         "complex-cuda-amgx",
     }
     env["EIT_APP_GUI_PROFILE"] = (
         "gpu"
-        if cache.profile.endswith("-cuda") or cache.profile in gpu_profiles
+        if cache.profile.endswith("-cuda")
+        or "-cuda-" in cache.profile
+        or cache.profile in gpu_profiles
         else "cpu"
     )
     if cache.profile in {"complex", "complex-cuda", "complex-cuda-amgx"}:
         env["EIT_APP_GUI_PRECISION"] = "complex128"
-    elif cache.profile in {"complex64", "complex64-cuda"}:
+    elif cache.profile in {"complex64", "complex64-cuda", "complex64-cuda-sm61"}:
         env["EIT_APP_GUI_PRECISION"] = "complex64"
     return env, cache
 

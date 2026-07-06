@@ -132,6 +132,16 @@ def _route_for_traits(
     wants_gpu: bool,
     mesh_dimension: int,
 ) -> BackendRoute:
+    def _current_cuda_variant_profile(profile: str) -> str:
+        current = _current_profile()
+        if not current.endswith("-sm61"):
+            return profile
+        if profile == "cuda-amgx":
+            return "cuda-sm61"
+        if profile == "complex64-cuda":
+            return "complex64-cuda-sm61"
+        return profile
+
     if complex_required:
         precision = _target_precision()
         profile = (
@@ -143,11 +153,17 @@ def _route_for_traits(
             if precision == "complex128"
             else "complex64"
         )
+        if wants_gpu:
+            profile = _current_cuda_variant_profile(profile)
         reason = "complex_input_requires_complex_petsc_runtime"
     else:
         profile = "cuda-amgx" if wants_gpu else "default"
+        if wants_gpu:
+            profile = _current_cuda_variant_profile(profile)
         reason = (
-            "real_input_uses_real_amgx_petsc_runtime"
+            "real_input_uses_real_cuda_petsc_runtime"
+            if profile == "cuda-sm61"
+            else "real_input_uses_real_amgx_petsc_runtime"
             if wants_gpu
             else "real_input_uses_real_petsc_runtime"
         )

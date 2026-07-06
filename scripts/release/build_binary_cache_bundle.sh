@@ -29,7 +29,9 @@ SOURCE_DIR="$SOURCE_PARENT/PyEIDORS-$VERSION"
 SOURCE_ZIP="$DIST_DIR/PyEIDORS-$VERSION-pure-nix-source.zip"
 SOURCE_SHA="$DIST_DIR/PyEIDORS-$VERSION-pure-nix-source.SHA256SUMS.txt"
 
-BUNDLE_NAME="PyEIDORS-$VERSION-fast-install-$SYSTEM"
+BUNDLE_SUFFIX="${BUNDLE_SUFFIX:-}"
+BUNDLE_LABEL="fast-install${BUNDLE_SUFFIX:+-$BUNDLE_SUFFIX}"
+BUNDLE_NAME="PyEIDORS-$VERSION-$BUNDLE_LABEL-$SYSTEM"
 BUNDLE_PARENT="$DIST_DIR/binary-cache-bundle"
 BUNDLE_DIR="$BUNDLE_PARENT/$BUNDLE_NAME"
 CACHE_DIR="$BUNDLE_DIR/nix-cache"
@@ -48,22 +50,50 @@ SECRET_KEY_FILE="${SECRET_KEY_FILE:-$CACHE_KEY_DIR/$CACHE_KEY_NAME.sec}"
 PUBLIC_KEY_FILE="${PUBLIC_KEY_FILE:-$CACHE_KEY_DIR/$CACHE_KEY_NAME.pub}"
 
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
-PACKAGE_ATTRS=(
+PACKAGE_ATTRS_DEFAULT=(
   pyeidors
   pyeidors-complex
   pyeidors-complex64
   pyeidors-cuda
+  pyeidors-cuda-amgx
   pyeidors-complex-cuda
+  pyeidors-complex-cuda-amgx
   pyeidors-complex64-cuda
 )
-APP_ATTRS=(
+APP_ATTRS_DEFAULT=(
   eit-app-real-cpu
+  eit-backend-worker-real-cpu
+  eit-backend-doctor-real-cpu
   eit-app-complex64
-  eit-app-complex64-cuda
-  eit-app-real-gpu
+  eit-backend-worker-complex64
+  eit-backend-doctor-complex64
   eit-app-complex128-cpu
+  eit-backend-worker-complex128-cpu
+  eit-backend-doctor-complex128-cpu
+  eit-app-real-gpu
+  eit-backend-worker-real-gpu
+  eit-backend-doctor-real-gpu
+  eit-app-cuda-amgx
+  eit-backend-worker-cuda-amgx
+  eit-backend-doctor-cuda-amgx
+  eit-app-complex64-cuda
+  eit-backend-worker-complex64-cuda
+  eit-backend-doctor-complex64-cuda
   eit-app-complex128-gpu
+  eit-backend-worker-complex128-gpu
+  eit-backend-doctor-complex128-gpu
+  eit-app-complex-cuda-amgx
+  eit-backend-worker-complex128-gpu-amgx
+  eit-backend-doctor-complex128-gpu-amgx
 )
+PACKAGE_ATTRS=("${PACKAGE_ATTRS_DEFAULT[@]}")
+APP_ATTRS=("${APP_ATTRS_DEFAULT[@]}")
+if [ -n "${PACKAGE_ATTRS_OVERRIDE:-}" ]; then
+  read -r -a PACKAGE_ATTRS <<< "$PACKAGE_ATTRS_OVERRIDE"
+fi
+if [ -n "${APP_ATTRS_OVERRIDE:-}" ]; then
+  read -r -a APP_ATTRS <<< "$APP_ATTRS_OVERRIDE"
+fi
 
 if [ "$BUILD_SOURCE_ZIP" = "1" ] || [ ! -f "$SOURCE_ZIP" ] || [ ! -f "$SOURCE_SHA" ] || [ ! -f "$SOURCE_DIR/flake.nix" ]; then
   echo "[binary-cache] preparing source zip/staged source tree"
@@ -264,7 +294,9 @@ nvidia-smi
 | \`sm_120\` | Blackwell | RTX 50 系等 GB20x/Blackwell 消费级显卡 |
 | \`compute_120\` | PTX 前向兼容 | 为后续 Blackwell 同族或更新驱动 JIT 留出的 PTX 目标 |
 
-GTX 1660 属于 \`sm_75\`，可以使用 GPU 入口。GTX 1050 Ti 属于 \`sm_61\`，不在当前预编译 GPU 包范围内，请使用 CPU 入口。
+GTX 1660 属于 \`sm_75\`，可以使用主线 GPU 入口。GTX 1050 / GTX 1050 Ti 属于 \`sm_61\`，不在主线预编译 GPU 包范围内；如果你同时拿到了 \`cuda-sm61\` 附加包，请使用 legacy GPU 入口，否则请使用 CPU 入口。
+
+如果你拿到的是单独的 \`cuda-sm61\` 附加包，里面的 legacy GPU 入口已经按 \`sm_61\` 单独编译，面向 GTX 1050 / GTX 1050 Ti / GTX 1060 / GTX 1070 / GTX 1080。该附加包不会替换上面的主线 GPU 包；1660 用户继续使用主线 \`complex64-cuda\`。
 
 ### 1. 导入本地 binary cache
 
@@ -291,10 +323,16 @@ cd PyEIDORS-$VERSION
 
 ### 3. 启动 GUI
 
-CPU 用户、无 NVIDIA GPU 用户、GTX 1050 Ti 用户：
+CPU 用户、无 NVIDIA GPU 用户、未安装 \`cuda-sm61\` 附加包的 GTX 1050 / GTX 1050 Ti 用户：
 
 \`\`\`bash
 nix run .#eit-app-complex64
+\`\`\`
+
+已安装 \`cuda-sm61\` 附加包的 GTX 1050 / GTX 1050 Ti 用户：
+
+\`\`\`bash
+nix run .#eit-app-complex64-cuda-sm61
 \`\`\`
 
 GTX 1660 或其他受支持 NVIDIA GPU 用户：

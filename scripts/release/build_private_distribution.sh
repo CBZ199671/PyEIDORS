@@ -34,6 +34,9 @@ CPU_CACHE_APPS=(eit-cache eit-cache-complex eit-cache-complex64)
 CPU_PROFILES=(default complex complex64)
 CPU_SCALARS=(float64 complex128 complex64)
 CUDA_PACKAGE_ATTRS=(pyeidors-cuda pyeidors-complex-cuda pyeidors-complex64-cuda)
+if [ "${INCLUDE_CUDA_SM61:-0}" = "1" ]; then
+  CUDA_PACKAGE_ATTRS+=(pyeidors-cuda-sm61 pyeidors-complex64-cuda-sm61)
+fi
 
 record_cuda_progress() {
   if [ -x "$ROOT_DIR/scripts/release/monitor_cuda_build.sh" ]; then
@@ -200,6 +203,7 @@ required_root_files = (
     "flake.nix",
     "flake.lock",
     "pyproject.toml",
+    "pyeidors.backend.json",
     "README.md",
     "LICENSE",
 )

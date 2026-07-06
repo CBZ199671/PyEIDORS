@@ -39,7 +39,7 @@ GPU 用户额外需要：
 - NVIDIA 显卡和可用驱动。Linux/WSL2 里必须能看到 `nvidia-smi`。
 - 当前预编译 GPU 包使用 CUDA 12.8.1，编译目标为 `sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120`，并包含 `compute_120` PTX。
 - GTX 1660 属于 `sm_75`，可以使用当前 GPU 包。
-- GTX 1050 Ti 属于 `sm_61`，当前预编译 GPU 包不支持；请使用 CPU 通用入口 `nix run .#eit-app-complex64`。
+- GTX 1050 / GTX 1050 Ti 属于 `sm_61`，默认主线 GPU 包不支持；如果发布者同时提供 `cuda-sm61` 附加包，可以使用 legacy GPU 入口 `nix run .#eit-app-complex64-cuda-sm61`，否则请使用 CPU 通用入口 `nix run .#eit-app-complex64`。
 
 ### 当前 GPU 包已编译的显卡架构
 
@@ -56,11 +56,29 @@ GPU 用户额外需要：
 | `sm_120` | Blackwell | RTX 50 系等 GB20x/Blackwell 消费级显卡 |
 | `compute_120` | PTX 前向兼容 | 为后续 Blackwell 同族或更新驱动 JIT 留出的 PTX 目标 |
 
+### 可选 legacy GPU 附加包：`sm_61`
+
+GTX 1050、GTX 1050 Ti 以及 GTX 1060/1070/1080 属于 Pascal `sm_61`。它们不在默认主线 GPU 包里；发布者可以单独提供一个 `cuda-sm61` 附加二进制缓存包。这个附加包只为 `sm_61` 编译，不替换、不修改主线 `sm_75+` GPU 包。
+
+如果已安装 `cuda-sm61` 附加包，1050/1050 Ti 用户使用：
+
+```bash
+nix run .#eit-app-complex64-cuda-sm61
+```
+
+如果没有拿到 `cuda-sm61` 附加包，1050/1050 Ti 用户仍然用 CPU 通用入口：
+
+```bash
+nix run .#eit-app-complex64
+```
+
+注意：`cuda-sm61` legacy 包为了支持 Pascal 老卡，会在 Nix package set 中对 cuDNN 做局部 meta 覆盖；PyEIDORS 的 EIT 求解路线不依赖 cuDNN 神经网络算子。这个包主要用于 GTX 10 系 CUDA/PETSc 计算，稳定性和性能仍建议在目标机器上做一次实际样例验证。
+
 未编译进当前 GPU 包的常见老显卡：
 
 | 未编译目标 | 常见代表显卡 | 建议 |
 |---|---|---|
-| `sm_61` | GTX 1050 Ti、GTX 1060、GTX 1070、GTX 1080 | 使用 CPU 入口 `nix run .#eit-app-complex64` |
+| `sm_61` | GTX 1050、GTX 1050 Ti、GTX 1060、GTX 1070、GTX 1080 | 默认主包不支持；安装 `cuda-sm61` 附加包后可用 `nix run .#eit-app-complex64-cuda-sm61`，否则使用 CPU 入口 |
 | `sm_50` / `sm_52` | 部分 Maxwell / GTX 900 系 | 使用 CPU 入口 |
 | `sm_70` | V100 / Titan V | 当前包未预编译；默认使用 CPU 入口，或由发布者另行编译专用 GPU 包 |
 
@@ -70,7 +88,8 @@ GPU 用户额外需要：
 
 | 使用场景 | 推荐启动命令 | 说明 |
 |---|---|---|
-| 没有 NVIDIA GPU、显卡不在当前 GPU 包范围内，或暂时只想稳定运行 | `nix run .#eit-app-complex64` | 推荐 CPU 通用入口。可以处理复值问题；如果任务输出是纯实值，GUI 后端会转到实值 worker 以节省内存。GTX 1050 Ti 用户走这条。 |
+| 没有 NVIDIA GPU、显卡不在当前 GPU 包范围内，或暂时只想稳定运行 | `nix run .#eit-app-complex64` | 推荐 CPU 通用入口。可以处理复值问题；如果任务输出是纯实值，GUI 后端会转到实值 worker 以节省内存。未安装 `cuda-sm61` 附加包的 GTX 1050/1050 Ti 用户走这条。 |
+| GTX 1050 / GTX 1050 Ti，并且已安装 `cuda-sm61` 附加包 | `nix run .#eit-app-complex64-cuda-sm61` | legacy GPU 入口，只为 Pascal `sm_61` 单独编译。 |
 | 有受支持的 NVIDIA GPU，并且 `nvidia-smi` 可用 | `nix run .#eit-app-complex64-cuda` | 推荐 GPU 通用入口。可以处理复值 CUDA 路线；纯实值任务会尽量走实值 worker。GTX 1660 用户可走这条。 |
 | 只做实值 CPU | `nix run .#eit-app-real-cpu` | 运行闭包更小，但不适合复导纳问题。 |
 | 只做实值 GPU | `nix run .#eit-app-real-gpu` | 需要可用 NVIDIA 驱动。 |
@@ -87,6 +106,12 @@ nix run .#eit-app-complex64
 
 ```bash
 nix run .#eit-app-complex64-cuda
+```
+
+已安装 `cuda-sm61` 附加包的 GTX 1050 / GTX 1050 Ti 用户用：
+
+```bash
+nix run .#eit-app-complex64-cuda-sm61
 ```
 
 ## 支持的平台
@@ -305,6 +330,13 @@ cd ~/apps/PyEIDORS-2.0.0
 nix run .#eit-app-complex64-cuda
 ```
 
+GTX 1050 / GTX 1050 Ti legacy GPU 入口，需要先安装发布者提供的 `cuda-sm61` 附加包：
+
+```bash
+cd ~/apps/PyEIDORS-2.0.0
+nix run .#eit-app-complex64-cuda-sm61
+```
+
 第一次运行可能会下载或构建较大的 Nix 依赖。CPU 路线通常比 GPU 路线轻；GPU 路线会包含 CUDA、PETSc/DOLFINx、PyTorch/VTK 等大闭包。如果发布者提供了私有 Nix binary cache，首次运行会快很多。
 
 后续再次运行会复用 `/nix/store`，通常会明显变快。
@@ -325,6 +357,13 @@ GPU 通用预热：
 ```bash
 cd ~/apps/PyEIDORS-2.0.0
 nix run .#eit-cache-complex64-cuda -- warm --profile complex64-cuda
+```
+
+GTX 1050 / GTX 1050 Ti legacy GPU 预热：
+
+```bash
+cd ~/apps/PyEIDORS-2.0.0
+nix run .#eit-cache-complex64-cuda-sm61 -- warm --profile complex64-cuda-sm61
 ```
 
 查看缓存状态：
@@ -357,6 +396,14 @@ GPU 通用版本：
 ```bash
 cd ~/apps/PyEIDORS-2.0.0
 nix profile install .#pyeidors-complex64-cuda
+eit-app
+```
+
+GTX 1050 / GTX 1050 Ti legacy GPU 版本：
+
+```bash
+cd ~/apps/PyEIDORS-2.0.0
+nix profile install .#pyeidors-complex64-cuda-sm61
 eit-app
 ```
 
@@ -393,6 +440,62 @@ nix profile remove <编号或包名>
 ```
 
 其中 `.#eit-app` 和 `.#eit-app-default` 是实值 CPU 入口。最终用户如果不确定任务是否包含复导纳，优先用 `.#eit-app-complex64` 或 `.#eit-app-complex64-cuda`。
+
+## 给外部 GUI 调用的后端接口
+
+PyEIDORS 自带 GUI 入口仍然保留；外部上位机、第三方 GUI 或不同硬件采集软件应优先使用后端产品接口，而不是进入 `nix develop`。
+
+安装目录根部包含：
+
+```text
+pyeidors.backend.json
+```
+
+外部 GUI 只需要让用户选择 PyEIDORS 安装目录，然后读取这个 manifest。manifest 的 `profiles` 是稳定后端产品接口菜单；外部 GUI 应展示 `displayName`，保存 profile ID，并使用对应 `workerLaunchCommand` 和 `doctorCommand`。不要在外部 GUI 里手写猜测路线名。
+
+当前发布包声明的 profile：
+
+| profile ID | 用途 | 默认 worker |
+| --- | --- | --- |
+| `default` | 实值 CPU / float64 | `nix run .#eit-backend-worker-real-cpu -- serve` |
+| `complex64` | 复值 CPU / complex64，默认推荐 | `nix run .#eit-backend-worker-complex64 -- serve` |
+| `complex` | 复值 CPU / complex128 | `nix run .#eit-backend-worker-complex128-cpu -- serve` |
+| `cuda` | 实值 GPU/CUDA | `nix run .#eit-backend-worker-real-gpu -- serve` |
+| `cuda-amgx` | 实值 GPU/CUDA AMGX | `nix run .#eit-backend-worker-cuda-amgx -- serve` |
+| `complex64-cuda` | 复值 GPU/CUDA complex64 | `nix run .#eit-backend-worker-complex64-cuda -- serve` |
+| `complex-cuda` | 复值 GPU/CUDA complex128 | `nix run .#eit-backend-worker-complex128-gpu -- serve` |
+| `complex-cuda-amgx` | 复值 GPU/CUDA AMGX complex128，实验路线 | `nix run .#eit-backend-worker-complex128-gpu-amgx -- serve` |
+| `cuda-sm61` | GTX 10 系 Pascal `sm_61` 实值 legacy GPU | `nix run .#eit-backend-worker-real-gpu-sm61 -- serve` |
+| `complex64-cuda-sm61` | GTX 10 系 Pascal `sm_61` 复值 complex64 legacy GPU | `nix run .#eit-backend-worker-complex64-cuda-sm61 -- serve` |
+
+默认 CPU 复值实时重构入口是：
+
+```bash
+nix run .#eit-backend-worker-complex64 -- serve
+```
+
+安装/路径选择后，先运行 doctor：
+
+```bash
+nix run .#eit-backend-doctor-complex64 -- --profile complex64 --format json
+```
+
+GPU 或 AMGX 路线使用 manifest 里的对应 doctor，例如：
+
+```bash
+nix run .#eit-backend-doctor-complex64-cuda -- --profile complex64-cuda --require-gpu --format json
+nix run .#eit-backend-doctor-cuda-amgx -- --profile cuda-amgx --require-gpu --require-amgx --format json
+```
+
+doctor 会检查 Python/PyEIDORS import、`eit-backend-worker`、JSON-lines worker 协议、Nix、`nvidia-smi`、NVIDIA 驱动版本、CUDA 12.8.1 最低驱动要求和 `sm_61` legacy profile 选择。当前 CUDA 12.8.1 路线要求 Linux NVIDIA driver `>=570.124.06`；Windows driver `>=572.61`。AMGX 路线也按同一 CUDA 12.8.1 驱动门槛检查。
+
+外部 GUI 正常使用禁止默认走：
+
+```bash
+nix develop .#complex64 -c eit-backend-worker serve
+```
+
+`nix develop` 只给 PyEIDORS 开发者调试源码树使用，不作为最终用户安装路线。
 
 ## GPU 用户检查清单
 
@@ -534,6 +637,15 @@ nix build --max-jobs 1 --no-link --print-out-paths \
   .#pyeidors-complex64-cuda
 ```
 
+如果只想额外编译 GTX 1050 / GTX 1050 Ti 的 `sm_61` legacy GPU 包，不要改动或重编主线 `sm_75+` GPU 包，单独运行：
+
+```bash
+CUDA_NIX_MAX_JOBS=1 CUDA_NIX_CORES=1 \
+  scripts/release/build_cuda_sequential.sh \
+  pyeidors-cuda-sm61 \
+  pyeidors-complex64-cuda-sm61
+```
+
 发布脚本会把本文件复制成压缩包根目录的 `INSTALL.zh.md`，所以用户解压后直接读 `INSTALL.zh.md` 即可。
 
 ## 给发布者：如何打包二进制缓存
@@ -576,6 +688,26 @@ PyEIDORS-2.0.0-pure-nix-source.SHA256SUMS.txt
 .#pyeidors-complex-cuda
 .#pyeidors-complex64-cuda
 ```
+
+如果只给 GTX 1050 / GTX 1050 Ti 用户补发一个 `sm_61` 附加二进制缓存包，使用独立包名，避免覆盖已经发给 GTX 1660 用户的主线包：
+
+```bash
+BUNDLE_SUFFIX=cuda-sm61 \
+PACKAGE_ATTRS_OVERRIDE="pyeidors-cuda-sm61 pyeidors-complex64-cuda-sm61" \
+APP_ATTRS_OVERRIDE="eit-app-cuda-sm61 eit-cache-cuda-sm61 eit-app-complex64-cuda-sm61 eit-cache-complex64-cuda-sm61 eit-app-legacy-gpu eit-cache-legacy-gpu" \
+BUILD_SOURCE_ZIP=1 \
+MAX_JOBS=1 \
+scripts/release/build_binary_cache_bundle.sh
+```
+
+输出文件名会变成：
+
+```text
+dist/PyEIDORS-2.0.0-fast-install-cuda-sm61-x86_64-linux.tar.zst
+dist/PyEIDORS-2.0.0-fast-install-cuda-sm61-x86_64-linux.SHA256SUMS.txt
+```
+
+这个附加包只导出 `pyeidors-cuda-sm61` 和 `pyeidors-complex64-cuda-sm61` 的闭包；不会重新导出主线 `pyeidors-complex64-cuda`，也不会覆盖已有主线 fast-install 压缩包。
 
 脚本会自动为本地 binary cache 生成签名 key：
 

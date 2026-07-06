@@ -39,6 +39,7 @@
                 rel = lib.removePrefix "${root}/" (toString path);
               in
               rel == "pyproject.toml"
+              || rel == "pyeidors.backend.json"
               || rel == "README.md"
               || rel == "LICENSE"
               || rel == "src"
@@ -104,22 +105,44 @@
           fenicsDolfinxComplexSingle = mkFenicsDolfinx py petsc4pyComplexSingle;
 
           linuxCudaSupported = system == "x86_64-linux";
-          pkgsCuda = if linuxCudaSupported then import nixpkgs {
+          cudaMpiOverlay = (_final: _prev: {
+            ucx = pkgs.ucx;
+            ucc = pkgs.ucc;
+            openmpi = pkgs.openmpi;
+          });
+          mkCudaPkgs = {
+            configOverrides ? { },
+            extraOverlays ? [ ],
+          }: import nixpkgs {
             inherit system;
             config = {
               allowUnfree = true;
               cudaSupport = true;
+            } // configOverrides;
+            overlays = [ cudaMpiOverlay ] ++ extraOverlays;
+          };
+          pkgsCuda = if linuxCudaSupported then mkCudaPkgs { } else null;
+          pkgsCudaSm61 = if linuxCudaSupported then mkCudaPkgs {
+            configOverrides = {
+              cudaCapabilities = [ "6.1" ];
+              cudaForwardCompat = false;
             };
-            overlays = [
-              (_final: _prev: {
-                ucx = pkgs.ucx;
-                ucc = pkgs.ucc;
-                openmpi = pkgs.openmpi;
+            extraOverlays = [
+              (_final: prev: {
+                cudaPackages = prev.cudaPackages.overrideScope (_cudaFinal: cudaPrev: {
+                  cudnn = cudaPrev.cudnn.overrideAttrs (old: {
+                    meta = (old.meta or { }) // {
+                      badPlatforms = [ ];
+                    };
+                  });
+                });
               })
             ];
           } else null;
           pythonCuda = if linuxCudaSupported then pkgsCuda.python313 else null;
           pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
+          pythonCudaSm61 = if linuxCudaSupported then pkgsCudaSm61.python313 else null;
+          pyCudaSm61 = if linuxCudaSupported then pythonCudaSm61.pkgs else null;
           amgxSource = if linuxCudaSupported then pkgsCuda.fetchgit {
             url = amgxGitUrl;
             rev = amgxGitCommit;
@@ -157,13 +180,22 @@
               ln -s "${pkgsCuda.cmake}/bin/$tool" "$out/bin/$tool"
             done
           '' else null;
-          mkCudaPetsc = { scalarType ? null, precision ? null, withAmgx ? false, allowComplexAmgx ? false }:
+          mkCudaPetsc = {
+            pkgsCudaFor ? pkgsCuda,
+            pyCudaFor ? pyCuda,
+            amgxSourceArchiveFor ? amgxSourceArchive,
+            cmakeForPetscExternalPackagesFor ? cmakeForPetscExternalPackages,
+            scalarType ? null,
+            precision ? null,
+            withAmgx ? false,
+            allowComplexAmgx ? false,
+          }:
             assert !withAmgx || allowComplexAmgx || scalarType == null || scalarType == "real";
             assert !withAmgx || allowComplexAmgx || precision == null || precision == "double";
             if linuxCudaSupported then
-              (pkgsCuda.petsc.override ({
-                mpi = pkgsCuda.openmpi;
-                python3Packages = pyCuda;
+              (pkgsCudaFor.petsc.override ({
+                mpi = pkgsCudaFor.openmpi;
+                python3Packages = pyCudaFor;
                 pythonSupport = true;
               } // lib.optionalAttrs (scalarType != null) {
                 inherit scalarType;
@@ -201,26 +233,26 @@
                   amgx->selector = AmgXControlMap::Selectors.at(option);'
                 '';
                 nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
-                  pkgsCuda.cudaPackages.cuda_nvcc
-                ] ++ lib.optional withAmgx cmakeForPetscExternalPackages;
+                  pkgsCudaFor.cudaPackages.cuda_nvcc
+                ] ++ lib.optional withAmgx cmakeForPetscExternalPackagesFor;
                 buildInputs = (old.buildInputs or [ ]) ++ [
-                  pkgsCuda.cudaPackages.cuda_cudart
-                  pkgsCuda.cudaPackages.libcublas
-                  pkgsCuda.cudaPackages.libcusolver
-                  pkgsCuda.cudaPackages.libcusparse
+                  pkgsCudaFor.cudaPackages.cuda_cudart
+                  pkgsCudaFor.cudaPackages.libcublas
+                  pkgsCudaFor.cudaPackages.libcusolver
+                  pkgsCudaFor.cudaPackages.libcusparse
                 ] ++ lib.optionals withAmgx [
-                  pkgsCuda.cudaPackages.cuda_nvtx
-                  pkgsCuda.cudaPackages.libcurand
+                  pkgsCudaFor.cudaPackages.cuda_nvtx
+                  pkgsCudaFor.cudaPackages.libcurand
                 ];
                 configureFlags = (old.configureFlags or [ ]) ++ [
                   "--with-cuda=1"
-                  "--with-cudac=${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
-                  "--with-cuda-dir=${pkgsCuda.cudaPackages.cudatoolkit}"
+                  "--with-cudac=${pkgsCudaFor.cudaPackages.cuda_nvcc}/bin/nvcc"
+                  "--with-cuda-dir=${pkgsCudaFor.cudaPackages.cudatoolkit}"
                   "--with-cublas=1"
                   "--with-cusparse=1"
                   "--with-cusolver=1"
                 ] ++ lib.optionals withAmgx [
-                  "--download-amgx=${amgxSourceArchive}"
+                  "--download-amgx=${amgxSourceArchiveFor}"
                   "--with-64-bit-indices=0"
                   "--with-cxx-dialect=17"
                   "--with-cuda-dialect=17"
@@ -243,9 +275,9 @@
           cudaPetscComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplex else null;
           cudaPetscComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexAmgx else null;
           cudaPetscComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexSingle else null;
-          mkCudaSlepc = petscPkg: if linuxCudaSupported then (
-            pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/sl/slepc/package.nix" {
-              python3Packages = pyCuda;
+          mkCudaSlepcFor = pkgsCudaFor: pyCudaFor: petscPkg: if linuxCudaSupported then (
+            pkgsCudaFor.callPackage "${nixpkgsPath}/pkgs/by-name/sl/slepc/package.nix" {
+              python3Packages = pyCudaFor;
               petsc = petscPkg;
               pythonSupport = true;
             }
@@ -253,6 +285,7 @@
             doInstallCheck = false;
             doCheck = false;
           }) else null;
+          mkCudaSlepc = mkCudaSlepcFor pkgsCuda pyCuda;
           cudaSlepc = mkCudaSlepc cudaPetsc;
           cudaSlepcAmgx = mkCudaSlepc cudaPetscAmgx;
           cudaSlepcComplex = mkCudaSlepc cudaPetscComplex;
@@ -263,36 +296,69 @@
           cudaSlepcComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplex else null;
           cudaSlepcComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexAmgx else null;
           cudaSlepcComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexSingle else null;
-          mkCudaDolfinx = petscPkg: slepcPkg:
-            if linuxCudaSupported then pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
-              python3Packages = pyCuda;
+          mkCudaDolfinxFor = pkgsCudaFor: pyCudaFor: petscPkg: slepcPkg:
+            if linuxCudaSupported then pkgsCudaFor.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
+              python3Packages = pyCudaFor;
               petsc = petscPkg;
               slepc = slepcPkg;
             } else null;
+          mkCudaDolfinx = mkCudaDolfinxFor pkgsCuda pyCuda;
           cudaDolfinx = mkCudaDolfinx cudaPetsc cudaSlepc;
           cudaDolfinxAmgx = mkCudaDolfinx cudaPetscAmgx cudaSlepcAmgx;
           cudaDolfinxComplex = mkCudaDolfinx cudaPetscComplex cudaSlepcComplex;
           cudaDolfinxComplexAmgx = mkCudaDolfinx cudaPetscComplexAmgx cudaSlepcComplexAmgx;
           cudaDolfinxComplexSingle = mkCudaDolfinx cudaPetscComplexSingle cudaSlepcComplexSingle;
-          mkCudaFenicsDolfinx = dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
+          mkCudaFenicsDolfinxFor = pkgsCudaFor: pyCudaFor: dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
             if linuxCudaSupported then (
-              pyCuda.callPackage "${nixpkgsPath}/pkgs/development/python-modules/fenics-dolfinx/default.nix" {
+              pyCudaFor.callPackage "${nixpkgsPath}/pkgs/development/python-modules/fenics-dolfinx/default.nix" {
                 dolfinx = dolfinxPkg;
                 petsc4py = petsc4pyPkg;
                 slepc4py = slepc4pyPkg;
               }
             ).overridePythonAttrs (
               old: {
-                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyCuda.cmake ];
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyCudaFor.cmake ];
                 doCheck = false;
                 doInstallCheck = false;
               }
             ) else null;
+          mkCudaFenicsDolfinx = mkCudaFenicsDolfinxFor pkgsCuda pyCuda;
           cudaFenicsDolfinx = mkCudaFenicsDolfinx cudaDolfinx cudaPetsc4py cudaSlepc4py;
           cudaFenicsDolfinxAmgx = mkCudaFenicsDolfinx cudaDolfinxAmgx cudaPetscAmgx4py cudaSlepcAmgx4py;
           cudaFenicsDolfinxComplex = mkCudaFenicsDolfinx cudaDolfinxComplex cudaPetscComplex4py cudaSlepcComplex4py;
           cudaFenicsDolfinxComplexAmgx = mkCudaFenicsDolfinx cudaDolfinxComplexAmgx cudaPetscComplexAmgx4py cudaSlepcComplexAmgx4py;
           cudaFenicsDolfinxComplexSingle = mkCudaFenicsDolfinx cudaDolfinxComplexSingle cudaPetscComplexSingle4py cudaSlepcComplexSingle4py;
+          cudaSm61Petsc = mkCudaPetsc {
+            pkgsCudaFor = pkgsCudaSm61;
+            pyCudaFor = pyCudaSm61;
+          };
+          cudaSm61PetscComplexSingle = mkCudaPetsc {
+            pkgsCudaFor = pkgsCudaSm61;
+            pyCudaFor = pyCudaSm61;
+            scalarType = "complex";
+            precision = "single";
+          };
+          cudaSm61Petsc4py = if linuxCudaSupported then pyCudaSm61.toPythonModule cudaSm61Petsc else null;
+          cudaSm61PetscComplexSingle4py =
+            if linuxCudaSupported then pyCudaSm61.toPythonModule cudaSm61PetscComplexSingle else null;
+          mkCudaSm61Slepc = mkCudaSlepcFor pkgsCudaSm61 pyCudaSm61;
+          cudaSm61Slepc = mkCudaSm61Slepc cudaSm61Petsc;
+          cudaSm61SlepcComplexSingle = mkCudaSm61Slepc cudaSm61PetscComplexSingle;
+          cudaSm61Slepc4py = if linuxCudaSupported then pyCudaSm61.toPythonModule cudaSm61Slepc else null;
+          cudaSm61SlepcComplexSingle4py =
+            if linuxCudaSupported then pyCudaSm61.toPythonModule cudaSm61SlepcComplexSingle else null;
+          mkCudaSm61Dolfinx = mkCudaDolfinxFor pkgsCudaSm61 pyCudaSm61;
+          cudaSm61Dolfinx = mkCudaSm61Dolfinx cudaSm61Petsc cudaSm61Slepc;
+          cudaSm61DolfinxComplexSingle =
+            mkCudaSm61Dolfinx cudaSm61PetscComplexSingle cudaSm61SlepcComplexSingle;
+          mkCudaSm61FenicsDolfinx = mkCudaFenicsDolfinxFor pkgsCudaSm61 pyCudaSm61;
+          cudaSm61FenicsDolfinx =
+            mkCudaSm61FenicsDolfinx cudaSm61Dolfinx cudaSm61Petsc4py cudaSm61Slepc4py;
+          cudaSm61FenicsDolfinxComplexSingle =
+            mkCudaSm61FenicsDolfinx
+              cudaSm61DolfinxComplexSingle
+              cudaSm61PetscComplexSingle4py
+              cudaSm61SlepcComplexSingle4py;
 
           mkRuntimePython = { pkgsFor, pyFor }:
             let
@@ -689,6 +755,35 @@
               cuda-amgx = pyeidorsCudaAmgx;
             };
           } else null;
+          pyeidorsCudaSm61 = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCudaSm61;
+            pyFor = pyCudaSm61;
+            profile = "cuda-sm61";
+            fenicsDolfinxPkg = cudaSm61FenicsDolfinx;
+            petsc4pyPkg = cudaSm61Petsc4py;
+            cuda = true;
+            petscPkg = cudaSm61Petsc;
+            slepcPkg = cudaSm61Slepc;
+            backendWorkerCommands = {
+              default = pyeidors;
+            };
+          } else null;
+          pyeidorsComplex64CudaSm61 = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCudaSm61;
+            pyFor = pyCudaSm61;
+            profile = "complex64-cuda-sm61";
+            fenicsDolfinxPkg = cudaSm61FenicsDolfinxComplexSingle;
+            petsc4pyPkg = cudaSm61PetscComplexSingle4py;
+            cuda = true;
+            petscPkg = cudaSm61PetscComplexSingle;
+            slepcPkg = cudaSm61SlepcComplexSingle;
+            scalarEnv = "complex64";
+            precisionEnv = "complex64";
+            backendWorkerCommands = {
+              default = pyeidors;
+              cuda-sm61 = pyeidorsCudaSm61;
+            };
+          } else null;
         in
         {
           inherit pyeidors;
@@ -702,6 +797,8 @@
           pyeidors-complex-cuda = pyeidorsComplexCuda;
           pyeidors-complex-cuda-amgx = pyeidorsComplexCudaAmgx;
           pyeidors-complex64-cuda = pyeidorsComplex64Cuda;
+          pyeidors-cuda-sm61 = pyeidorsCudaSm61;
+          pyeidors-complex64-cuda-sm61 = pyeidorsComplex64CudaSm61;
         }
       );
 
@@ -724,31 +821,59 @@
           eit-cache-default = mkApp "pyeidors" "eit-cache" "Manage and warm PyEIDORS default real-valued CPU caches";
           eit-app-real-cpu = mkApp "pyeidors" "eit-app" "Launch the PyEIDORS real-valued CPU GUI";
           eit-cache-real-cpu = mkApp "pyeidors" "eit-cache" "Manage and warm PyEIDORS real-valued CPU caches";
+          eit-backend-worker-real-cpu = mkApp "pyeidors" "eit-backend-worker" "Run the PyEIDORS real-valued CPU backend worker";
+          eit-backend-doctor-real-cpu = mkApp "pyeidors" "eit-backend-doctor" "Check the PyEIDORS real-valued CPU backend runtime";
           eit-app-complex = mkApp "pyeidors-complex" "eit-app" "Launch the PyEIDORS complex128 CPU GUI";
           eit-cache-complex = mkApp "pyeidors-complex" "eit-cache" "Manage and warm PyEIDORS complex128 CPU caches";
           eit-app-complex128-cpu = mkApp "pyeidors-complex" "eit-app" "Launch the PyEIDORS complex128 CPU GUI";
           eit-cache-complex128-cpu = mkApp "pyeidors-complex" "eit-cache" "Manage and warm PyEIDORS complex128 CPU caches";
+          eit-backend-worker-complex128-cpu = mkApp "pyeidors-complex" "eit-backend-worker" "Run the PyEIDORS complex128 CPU backend worker";
+          eit-backend-doctor-complex128-cpu = mkApp "pyeidors-complex" "eit-backend-doctor" "Check the PyEIDORS complex128 CPU backend runtime";
           eit-app-complex64 = mkApp "pyeidors-complex64" "eit-app" "Launch the PyEIDORS complex64 CPU GUI";
           eit-cache-complex64 = mkApp "pyeidors-complex64" "eit-cache" "Manage and warm PyEIDORS complex64 CPU caches";
           eit-app-complex64-cpu = mkApp "pyeidors-complex64" "eit-app" "Launch the PyEIDORS complex64 CPU GUI";
           eit-cache-complex64-cpu = mkApp "pyeidors-complex64" "eit-cache" "Manage and warm PyEIDORS complex64 CPU caches";
+          eit-backend-worker-complex64 = mkApp "pyeidors-complex64" "eit-backend-worker" "Run the PyEIDORS complex64 CPU backend worker";
+          eit-backend-doctor-complex64 = mkApp "pyeidors-complex64" "eit-backend-doctor" "Check the PyEIDORS complex64 CPU backend runtime";
+          eit-backend-worker-complex64-cpu = mkApp "pyeidors-complex64" "eit-backend-worker" "Run the PyEIDORS complex64 CPU backend worker";
+          eit-backend-doctor-complex64-cpu = mkApp "pyeidors-complex64" "eit-backend-doctor" "Check the PyEIDORS complex64 CPU backend runtime";
         } // lib.optionalAttrs (hasPackage "pyeidors-cuda") {
           eit-app-cuda = mkApp "pyeidors-cuda" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI";
           eit-cache-cuda = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
           eit-app-real-gpu = mkApp "pyeidors-cuda" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI";
           eit-cache-real-gpu = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
+          eit-backend-worker-real-gpu = mkApp "pyeidors-cuda" "eit-backend-worker" "Run the PyEIDORS real-valued CUDA backend worker";
+          eit-backend-doctor-real-gpu = mkApp "pyeidors-cuda" "eit-backend-doctor" "Check the PyEIDORS real-valued CUDA backend runtime";
           eit-app-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-app" "Launch the PyEIDORS real-valued CUDA AmgX GUI";
           eit-cache-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA AmgX caches";
+          eit-backend-worker-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-backend-worker" "Run the PyEIDORS CUDA AmgX backend worker";
+          eit-backend-doctor-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-backend-doctor" "Check the PyEIDORS CUDA AmgX backend runtime";
           eit-app-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
           eit-cache-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
           eit-app-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
           eit-cache-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
+          eit-backend-worker-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-backend-worker" "Run the PyEIDORS complex128 CUDA backend worker";
+          eit-backend-doctor-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-backend-doctor" "Check the PyEIDORS complex128 CUDA backend runtime";
           eit-app-complex-cuda-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-app" "Launch the PyEIDORS experimental complex128 CUDA AmgX GUI";
           eit-cache-complex-cuda-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-cache" "Manage and warm PyEIDORS experimental complex128 CUDA AmgX caches";
+          eit-backend-worker-complex128-gpu-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-backend-worker" "Run the PyEIDORS experimental complex128 CUDA AmgX backend worker";
+          eit-backend-doctor-complex128-gpu-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-backend-doctor" "Check the PyEIDORS experimental complex128 CUDA AmgX backend runtime";
           eit-app-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
           eit-cache-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches";
           eit-app-complex64-gpu = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
           eit-cache-complex64-gpu = mkApp "pyeidors-complex64-cuda" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches";
+          eit-backend-worker-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-backend-worker" "Run the PyEIDORS complex64 CUDA backend worker";
+          eit-backend-doctor-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-backend-doctor" "Check the PyEIDORS complex64 CUDA backend runtime";
+          eit-app-cuda-sm61 = mkApp "pyeidors-cuda-sm61" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI for sm_61 Pascal GPUs";
+          eit-cache-cuda-sm61 = mkApp "pyeidors-cuda-sm61" "eit-cache" "Manage and warm PyEIDORS CUDA caches for sm_61 Pascal GPUs";
+          eit-backend-worker-real-gpu-sm61 = mkApp "pyeidors-cuda-sm61" "eit-backend-worker" "Run the PyEIDORS real-valued CUDA backend worker for sm_61 Pascal GPUs";
+          eit-backend-doctor-real-gpu-sm61 = mkApp "pyeidors-cuda-sm61" "eit-backend-doctor" "Check the PyEIDORS real-valued CUDA backend runtime for sm_61 Pascal GPUs";
+          eit-app-complex64-cuda-sm61 = mkApp "pyeidors-complex64-cuda-sm61" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI for sm_61 Pascal GPUs";
+          eit-cache-complex64-cuda-sm61 = mkApp "pyeidors-complex64-cuda-sm61" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches for sm_61 Pascal GPUs";
+          eit-backend-worker-complex64-cuda-sm61 = mkApp "pyeidors-complex64-cuda-sm61" "eit-backend-worker" "Run the PyEIDORS complex64 CUDA backend worker for sm_61 Pascal GPUs";
+          eit-backend-doctor-complex64-cuda-sm61 = mkApp "pyeidors-complex64-cuda-sm61" "eit-backend-doctor" "Check the PyEIDORS complex64 CUDA backend runtime for sm_61 Pascal GPUs";
+          eit-app-legacy-gpu = mkApp "pyeidors-complex64-cuda-sm61" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI for sm_61 Pascal GPUs";
+          eit-cache-legacy-gpu = mkApp "pyeidors-complex64-cuda-sm61" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches for sm_61 Pascal GPUs";
         }
       );
 
