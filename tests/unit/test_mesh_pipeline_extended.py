@@ -243,14 +243,26 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
     )
     assert created.num_vertices() > 0
 
-    read_calls = {"count": 0}
+    disk_reads = {"xdmf": 0, "msh": 0}
+    original_load_dolfinx_mesh_cache = opt_mesh_module.load_dolfinx_mesh_cache
+
+    def _tracked_load_dolfinx_mesh_cache(*args, **kwargs):
+        cache_data = original_load_dolfinx_mesh_cache(*args, **kwargs)
+        if cache_data is not None:
+            disk_reads["xdmf"] += 1
+        return cache_data
 
     def _tracked_read_from_msh(file, comm, rank, gdim):
         _ = (file, comm, rank, gdim)
-        read_calls["count"] += 1
+        disk_reads["msh"] += 1
         return fake_mesh_data
 
     clear_process_mesh_cache()
+    monkeypatch.setattr(
+        opt_mesh_module,
+        "load_dolfinx_mesh_cache",
+        _tracked_load_dolfinx_mesh_cache,
+    )
     monkeypatch.setattr(
         opt_mesh_module.gmshio,
         "read_from_msh",
@@ -264,6 +276,7 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         refinement=4,
         electrode_coverage=0.5,
     )
+    first_layer = getattr(mesh_first, "_pyeidors_mesh_cache_layer", None)
     mesh_second = opt_mesh_module.load_or_create_mesh(
         mesh_dir=str(tmp_path),
         mesh_name="opt_patch",
@@ -275,7 +288,8 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
     assert (tmp_path / "opt_patch.xdmf").exists()
     # Clearing the process cache forces one disk reload; the second call should
     # then reuse the freshly repopulated process cache.
-    assert read_calls["count"] == 1
+    assert disk_reads["xdmf"] + disk_reads["msh"] == 1
+    assert first_layer == "disk"
     assert mesh_first is mesh_second
     assert getattr(mesh_second, "_pyeidors_mesh_cache_layer", None) == "process"
 

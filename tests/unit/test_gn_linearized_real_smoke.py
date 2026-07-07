@@ -155,7 +155,13 @@ def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_r
     base_data, _ = fwd.fwd_solve(
         EITImage(elem_data=np.ones(lazy.shape[1]), fwd_model=fwd)
     )
-    eps = 1.0e-4
+    # The direction vector is intentionally large enough to stress the
+    # matrix-free path, so the finite-difference scale must be small enough to
+    # stay in the infinitesimal regime.  A 1e-4 step perturbs sigma by up to
+    # 0.9 here and measures nonlinear response rather than the Jacobian action.
+    eps = (
+        1.0e-5 if np.asarray(base_data.meas).dtype == np.dtype(np.complex64) else 1.0e-6
+    )
     perturbed_data, _ = fwd.fwd_solve(
         EITImage(elem_data=np.ones(lazy.shape[1]) + eps * vector, fwd_model=fwd)
     )
