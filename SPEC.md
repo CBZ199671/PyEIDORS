@@ -783,6 +783,7 @@ CLI additions still pending unless named above:
 | V668 | Measurement-space one-step RM ! non-diagonal sparse graph/TV RtR uses sparse prior-inverse apply + tiny auto-ridge metadata; ⊥ dense P×P prior materialization/pinv fallback; GUI/database Laplace/curvature RM default form=measurement, cache signature records prior-inverse policy | src/pyeidors/inverse/reconstruction_matrix.py; src/eit_app/controllers/reconstruction_controller.py; src/eit_app/models/reconstruction_methods.py; src/eit_app/ui/main_window.py; tests/unit/test_reconstruction_matrix.py; tests/unit/test_reconstruction_cache_regressions.py; tests/unit/test_database_reconstruction_methods.py; tests/unit/test_eit_app_gui_smoke.py; B566 |
 | V669 | One-step RM GUI voltage-fit ! if full fit Jacobian is not persisted because it is too large, auto-built RM artifact persists measurement-space `fit_matrix=J_raw@RM` and hot path returns finite `simulated` via `fit_matrix @ contracted_dv`; ⊥ successful RM image with missing reconstructed voltage-fit curve | src/pyeidors/inverse/reconstruction_matrix.py; src/eit_app/controllers/reconstruction_controller.py; tests/unit/test_reconstruction_cache_regressions.py; B567 |
 | V670 | Backend doctor subprocess checks ! convert `TimeoutExpired` into same check id status `error` with timeout seconds in message; `--format json` still prints full report; `--no-fail` only exit override | src/eit_app/backend_doctor.py; tests/unit/test_backend_manifest_doctor.py; B568 |
+| V671 | sm61 GUI backend routing ! `EIT_APP_GUI_PRECISION=complex128` + 3D GPU complex request on `*-sm61` runtime routes to CPU `complex` profile with reason `complex128_gpu_unsupported_on_sm61_fallback_cpu`; ⊥ nonexistent `complex-cuda-sm61`, ⊥ silent `complex64` downgrade | src/eit_app/backend_routing.py; tests/unit/test_gui_backend_worker_routing.py; B569 |
 
 ## §T — tasks
 
@@ -2000,3 +2001,4 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B566 | 2026-06-20 | measurement form 对 graph Laplace/curvature RtR 直接 dense/pinv R^-1 J^H；奇异/近奇异 sparse prior 既 OOM 又放大数值误差，GUI 因旧 guard 默认 param | V668 |
 | B567 | 2026-06-20 | 三维 RM 热路径在完整 fit Jacobian 超过预算时仍复用旧 artifact；图像可由 RM@ΔV 重建，但 `simulated` 为空，GUI 边界电压拟合只剩真值曲线 | V669 |
 | B568 | 2026-07-07 | `backend_doctor._run_command` let `TimeoutExpired` escape; worker/nix/nvidia timeout → traceback before JSON report | V670 |
+| B569 | 2026-07-07 | sm61 runtime + complex128 GPU complex route returned nonexistent `complex-cuda`/sm61 package path instead of usable CPU complex fallback | V671 |

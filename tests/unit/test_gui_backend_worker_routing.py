@@ -139,6 +139,77 @@ def test_sm61_complex_3d_forward_uses_current_profile_inprocess(
     assert "target_profile_matches_current_runtime" in route.reason
 
 
+@pytest.mark.parametrize(
+    "runtime_profile",
+    ["cuda-sm61", "complex64-cuda-sm61"],
+)
+def test_sm61_complex128_3d_forward_routes_to_cpu_complex_runtime(
+    monkeypatch,
+    runtime_profile: str,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", runtime_profile)
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setenv("EIT_APP_GUI_PRECISION", "complex128")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        background_conductivity=1.0 + 0.2j,
+        forward_model_config={
+            "mesh_dimension": 3,
+            "background_conductivity": "1+0.2j",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "complex"
+    assert route.external is True
+    assert "complex128_gpu_unsupported_on_sm61_fallback_cpu" in route.reason
+
+
+def test_non_sm61_complex128_3d_forward_still_routes_to_complex_cuda(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setenv("EIT_APP_GUI_PRECISION", "complex128")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        background_conductivity=1.0 + 0.2j,
+        forward_model_config={
+            "mesh_dimension": 3,
+            "background_conductivity": "1+0.2j",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "complex-cuda"
+    assert route.external is True
+    assert "complex128_gpu_unsupported_on_sm61_fallback_cpu" not in route.reason
+
+
+def test_sm61_complex64_3d_forward_still_routes_to_complex64_legacy_cuda(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda-sm61")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setenv("EIT_APP_GUI_PRECISION", "complex64")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        background_conductivity=1.0 + 0.2j,
+        forward_model_config={
+            "mesh_dimension": 3,
+            "background_conductivity": "1+0.2j",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "complex64-cuda-sm61"
+    assert route.external is False
+    assert "target_profile_matches_current_runtime" in route.reason
+
+
 def test_v624_packaged_profile_command_wins_over_direct_profile_mismatch(
     monkeypatch,
 ) -> None:
@@ -1313,6 +1384,33 @@ def test_v136_complex_reconstruction_stays_on_complex_cuda_profile(
     assert route.profile == "complex64-cuda"
     assert route.external is False
     assert "target_profile_matches_current_runtime" in route.reason
+
+
+def test_sm61_complex128_reconstruction_routes_to_cpu_complex_runtime(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda-sm61")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setenv("EIT_APP_GUI_PRECISION", "complex128")
+    frame = FrameData(
+        real=np.array([1.0, 2.0], dtype=np.float32),
+        imag=np.array([0.1, 0.2], dtype=np.float32),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    request = ReconstructionRequest(
+        reference_frame=frame,
+        target_frame=frame,
+        use_part="complex",
+        mesh_dimension=3,
+        metadata={"acceleration_profile": "gpu3d"},
+    )
+
+    route = select_reconstruction_backend_route(request)
+
+    assert route.profile == "complex"
+    assert route.external is True
+    assert "complex128_gpu_unsupported_on_sm61_fallback_cpu" in route.reason
 
 
 def test_v136_reconstruction_backend_worker_uses_hdf5_protocol_and_profile(
