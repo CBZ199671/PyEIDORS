@@ -21,3 +21,6 @@
 *.pth binary
 *.sqlite binary
 *.zip binary
+
+# Measurement CSV files come from hardware/export tools; preserve original bytes.
+data/measurements/** -text
