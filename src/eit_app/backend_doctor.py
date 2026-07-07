@@ -29,6 +29,7 @@ CUDA_DRIVER_REQUIREMENT_SOURCE = (
 )
 DEFAULT_PROFILE = "complex64"
 DEFAULT_WORKER_COMMAND = "eit-backend-worker"
+COMMAND_TIMEOUT_RETURNCODE = 124
 PROFILE_PACKAGE_ATTRS = {
     "default": "pyeidors",
     "complex": "pyeidors-complex",
@@ -73,15 +74,82 @@ def _check(
 def _run_command(
     args: list[str], timeout: float = 10.0, input_text: str | None = None
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        input=input_text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
+    try:
+        return subprocess.run(
+            args,
+            input=input_text,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _timeout_completed_process(args, timeout, exc)
+
+
+def _format_timeout_seconds(timeout: float) -> str:
+    value = float(timeout)
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:g}"
+
+
+def _coerce_timeout_stream(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
+def _timeout_completed_process(
+    args: list[str], timeout: float, exc: subprocess.TimeoutExpired
+) -> subprocess.CompletedProcess[str]:
+    seconds = _format_timeout_seconds(timeout)
+    stderr = _coerce_timeout_stream(exc.stderr)
+    if stderr:
+        stderr = f"{stderr.rstrip()}\n"
+    stderr += f"command timed out after {seconds} seconds"
+    result = subprocess.CompletedProcess(
+        args=args,
+        returncode=COMMAND_TIMEOUT_RETURNCODE,
+        stdout=_coerce_timeout_stream(exc.output),
+        stderr=stderr,
     )
+    result.timed_out = True  # type: ignore[attr-defined]
+    result.timeout = float(timeout)  # type: ignore[attr-defined]
+    return result
+
+
+def _run_command_safely(
+    args: list[str], timeout: float = 10.0, input_text: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return _run_command(args, timeout=timeout, input_text=input_text)
+    except subprocess.TimeoutExpired as exc:
+        return _timeout_completed_process(args, timeout, exc)
+
+
+def _command_timed_out(result: subprocess.CompletedProcess[str]) -> bool:
+    return bool(getattr(result, "timed_out", False)) or (
+        result.returncode == COMMAND_TIMEOUT_RETURNCODE
+        and "timed out after" in str(result.stderr)
+    )
+
+
+def _command_failure_message(
+    action: str, result: subprocess.CompletedProcess[str]
+) -> str:
+    if _command_timed_out(result):
+        timeout = getattr(result, "timeout", None)
+        if timeout is None:
+            match = re.search(r"timed out after\s+([0-9.]+)\s+seconds", result.stderr)
+            seconds = match.group(1) if match else "the configured"
+        else:
+            seconds = _format_timeout_seconds(float(timeout))
+        return f"{action} timed out after {seconds} seconds"
+    return f"{action} failed"
 
 
 def _read_project_version() -> str:
@@ -132,7 +200,10 @@ def _import_check(checks: list[dict[str, Any]]) -> None:
 
 
 def _worker_check(
-    checks: list[dict[str, Any]], worker_command: str, run_protocol_smoke: bool
+    checks: list[dict[str, Any]],
+    worker_command: str,
+    run_protocol_smoke: bool,
+    smoke_timeout: float = 20.0,
 ) -> None:
     worker_path = shutil.which(worker_command)
     if not worker_path:
@@ -142,13 +213,13 @@ def _worker_check(
         return
     _check(checks, "worker-command", "ok", "worker command found", path=worker_path)
 
-    help_result = _run_command([worker_path, "--help"], timeout=10.0)
+    help_result = _run_command_safely([worker_path, "--help"], timeout=10.0)
     if help_result.returncode != 0:
         _check(
             checks,
             "worker-help",
             "error",
-            "worker --help failed",
+            _command_failure_message("worker --help", help_result),
             returncode=help_result.returncode,
             stderr=help_result.stderr[-2000:],
         )
@@ -167,9 +238,9 @@ def _worker_check(
         _check(checks, "worker-protocol-smoke", "skip", "protocol smoke disabled")
         return
 
-    smoke = _run_command(
+    smoke = _run_command_safely(
         [worker_path, "serve"],
-        timeout=20.0,
+        timeout=smoke_timeout,
         input_text='{"id":"doctor-smoke","command":"shutdown"}\n',
     )
     if smoke.returncode != 0:
@@ -177,7 +248,7 @@ def _worker_check(
             checks,
             "worker-protocol-smoke",
             "error",
-            "worker serve shutdown smoke failed",
+            _command_failure_message("worker serve shutdown smoke", smoke),
             returncode=smoke.returncode,
             stdout=smoke.stdout[-2000:],
             stderr=smoke.stderr[-2000:],
@@ -231,9 +302,17 @@ def _nix_check(checks: list[dict[str, Any]]) -> None:
     if not nix_path:
         _check(checks, "nix", "warning", "nix not found on PATH inside current process")
         return
-    result = _run_command([nix_path, "--version"], timeout=5.0)
+    result = _run_command_safely([nix_path, "--version"], timeout=5.0)
     if result.returncode == 0:
         _check(checks, "nix", "ok", result.stdout.strip(), path=nix_path)
+    elif _command_timed_out(result):
+        _check(
+            checks,
+            "nix",
+            "error",
+            _command_failure_message("nix --version", result),
+            stderr=result.stderr[-1000:],
+        )
     else:
         _check(
             checks,
@@ -266,7 +345,7 @@ def _nvidia_smi_summary() -> tuple[list[dict[str, str]], str | None, str | None]
     smi = shutil.which("nvidia-smi")
     if not smi:
         return [], None, "nvidia-smi not found"
-    query = _run_command(
+    query = _run_command_safely(
         [
             smi,
             "--query-gpu=name,driver_version,compute_cap",
@@ -278,9 +357,19 @@ def _nvidia_smi_summary() -> tuple[list[dict[str, str]], str | None, str | None]
         return (
             [],
             None,
-            query.stderr.strip() or query.stdout.strip() or "nvidia-smi query failed",
+            _command_failure_message("nvidia-smi query", query)
+            if _command_timed_out(query)
+            else query.stderr.strip()
+            or query.stdout.strip()
+            or "nvidia-smi query failed",
         )
-    raw = _run_command([smi], timeout=10.0)
+    raw = _run_command_safely([smi], timeout=10.0)
+    if _command_timed_out(raw):
+        return (
+            _parse_nvidia_smi_table(query.stdout),
+            None,
+            _command_failure_message("nvidia-smi", raw),
+        )
     cuda_version: str | None = None
     match = re.search(r"CUDA Version:\s*([0-9.]+)", raw.stdout)
     if match:
@@ -375,6 +464,7 @@ def run_doctor(
     require_amgx: bool = False,
     worker_command: str = DEFAULT_WORKER_COMMAND,
     run_protocol_smoke: bool = True,
+    smoke_timeout: float = 20.0,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     normalized_profile = (profile or DEFAULT_PROFILE).strip() or DEFAULT_PROFILE
@@ -392,7 +482,9 @@ def run_doctor(
 
     _nix_check(checks)
     _import_check(checks)
-    _worker_check(checks, worker_command, run_protocol_smoke)
+    _worker_check(
+        checks, worker_command, run_protocol_smoke, smoke_timeout=smoke_timeout
+    )
     _gpu_check(checks, normalized_profile, require_gpu, require_amgx)
 
     has_error = any(item["status"] == "error" for item in checks)
@@ -447,6 +539,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-gpu", action="store_true")
     parser.add_argument("--require-amgx", action="store_true")
     parser.add_argument("--skip-protocol-smoke", action="store_true")
+    parser.add_argument(
+        "--smoke-timeout",
+        type=float,
+        default=20.0,
+        help="Seconds to wait for the worker serve shutdown smoke.",
+    )
     parser.add_argument("--format", choices=("human", "json"), default="human")
     parser.add_argument(
         "--no-fail", action="store_true", help="Always exit 0 after printing report."
@@ -459,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
         require_amgx=args.require_amgx,
         worker_command=args.worker_command,
         run_protocol_smoke=not args.skip_protocol_smoke,
+        smoke_timeout=args.smoke_timeout,
     )
     if args.format == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))

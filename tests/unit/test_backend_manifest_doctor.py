@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 from eit_app import backend_doctor
 
@@ -98,6 +99,130 @@ def test_backend_doctor_parses_nvidia_smi_query_rows():
             "compute_capability": "8.9",
         },
     ]
+
+
+def _check_by_id(checks, check_id: str):
+    return next(item for item in checks if item["id"] == check_id)
+
+
+def test_backend_doctor_run_command_converts_timeout(monkeypatch):
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(backend_doctor.subprocess, "run", _raise_timeout)
+
+    result = backend_doctor._run_command(["slow-command"], timeout=3.0)
+
+    assert result.returncode == backend_doctor.COMMAND_TIMEOUT_RETURNCODE
+    assert backend_doctor._command_timed_out(result)
+    assert "timed out after 3 seconds" in result.stderr
+
+
+def test_backend_doctor_worker_help_timeout_becomes_error_check(monkeypatch):
+    monkeypatch.setattr(backend_doctor.shutil, "which", lambda _command: "/bin/worker")
+
+    def _raise_timeout(args, timeout=10.0, input_text=None):
+        _ = input_text
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(backend_doctor, "_run_command", _raise_timeout)
+    checks = []
+
+    backend_doctor._worker_check(checks, "eit-backend-worker", True)
+
+    check = _check_by_id(checks, "worker-help")
+    assert check["status"] == "error"
+    assert check["returncode"] == backend_doctor.COMMAND_TIMEOUT_RETURNCODE
+    assert "timed out after 10 seconds" in check["message"]
+
+
+def test_backend_doctor_worker_smoke_timeout_uses_configured_timeout(monkeypatch):
+    monkeypatch.setattr(backend_doctor.shutil, "which", lambda _command: "/bin/worker")
+
+    def _run_or_timeout(args, timeout=10.0, input_text=None):
+        _ = input_text
+        if args == ["/bin/worker", "--help"]:
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="usage: worker\nserve\n",
+                stderr="",
+            )
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(backend_doctor, "_run_command", _run_or_timeout)
+    checks = []
+
+    backend_doctor._worker_check(
+        checks,
+        "eit-backend-worker",
+        True,
+        smoke_timeout=7.0,
+    )
+
+    check = _check_by_id(checks, "worker-protocol-smoke")
+    assert check["status"] == "error"
+    assert check["returncode"] == backend_doctor.COMMAND_TIMEOUT_RETURNCODE
+    assert "timed out after 7 seconds" in check["message"]
+
+
+def test_backend_doctor_nix_timeout_becomes_error_check(monkeypatch):
+    monkeypatch.setattr(backend_doctor.shutil, "which", lambda name: "/bin/nix")
+
+    def _raise_timeout(args, timeout=10.0, input_text=None):
+        _ = input_text
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(backend_doctor, "_run_command", _raise_timeout)
+    checks = []
+
+    backend_doctor._nix_check(checks)
+
+    check = _check_by_id(checks, "nix")
+    assert check["status"] == "error"
+    assert "timed out after 5 seconds" in check["message"]
+
+
+def test_backend_doctor_nvidia_smi_timeout_becomes_error_check(monkeypatch):
+    monkeypatch.setattr(
+        backend_doctor.shutil,
+        "which",
+        lambda name: "/bin/nvidia-smi" if name == "nvidia-smi" else None,
+    )
+
+    def _raise_timeout(args, timeout=10.0, input_text=None):
+        _ = input_text
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(backend_doctor, "_run_command", _raise_timeout)
+    checks = []
+
+    backend_doctor._gpu_check(checks, "cuda-amgx", require_gpu=True, require_amgx=True)
+
+    check = _check_by_id(checks, "nvidia-smi")
+    assert check["status"] == "error"
+    assert "timed out after 10 seconds" in check["message"]
+
+
+def test_backend_doctor_json_output_survives_timeout(monkeypatch, capsys):
+    def _which(name):
+        if name == "nix":
+            return "/bin/nix"
+        return None
+
+    def _raise_timeout(args, timeout=10.0, input_text=None):
+        _ = input_text
+        raise subprocess.TimeoutExpired(cmd=args, timeout=timeout)
+
+    monkeypatch.setattr(backend_doctor.shutil, "which", _which)
+    monkeypatch.setattr(backend_doctor, "_run_command", _raise_timeout)
+
+    exit_code = backend_doctor.main(["--format", "json"])
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert report["status"] == "error"
+    assert _check_by_id(report["checks"], "nix")["status"] == "error"
 
 
 def test_flake_exposes_backend_worker_and_doctor_apps():
