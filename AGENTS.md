@@ -9,6 +9,8 @@
 - 任何项目操作都必须先进入仓库根目录：
   `cd /home/tom/workspace/PyEidors_wsl2`。
 - Git 操作默认在 WSL2 中执行；除非用户明确要求，否则不要使用 Windows 原生 Git。
+- 本仓库本地约定 `git config core.filemode false`，用于避免 Windows/WSL 9P 权限位映射产生大批幻影改动。
+- 如需新增真正可执行脚本，提交前显式执行 `git update-index --chmod=+x <file>`，不要依赖 filemode 自动探测。
 - 不要回滚用户已有改动；如工作区已有无关修改，保持不动。
 
 ## WSL2 Stability
