@@ -212,6 +212,7 @@ fi
 echo "[pyeidors-cache] import complete"
 SH
 chmod +x "$BUNDLE_DIR/install-from-local-cache.sh"
+rm -f "$BUNDLE_DIR/binary-cache-public-key.txt"
 cp "$PUBLIC_KEY_FILE" "$BUNDLE_DIR/binary-cache-public-key.txt"
 
 cat > "$BUNDLE_DIR/README_FAST_INSTALL.zh.md" <<EOF
