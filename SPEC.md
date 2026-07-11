@@ -793,6 +793,7 @@ CLI additions still pending unless named above:
 | V678 | RM realtime result may carry ephemeral dynamic J/reference-scale/state-offset context inside process only; result HDF5/JSON metadata ⊥ serialize dense J; persistent dynamic layer reuses controller cache & adds no second long-lived J copy | src/eit_app/controllers/reconstruction_controller.py; src/eit_app/backend_worker_protocol.py; tests/unit/test_dynamic_kalman_session.py |
 | V679 | Measurement diagonal Kalman work/memory = `O(m²n+m³)`/`O(mn+n)` with configurable `m*n` budget; no full `n×n` covariance; output metadata records mode/algorithm/solve ms/fallback & state/measurement sizes | src/pyeidors/inverse/dynamic_session.py; src/eit_app/dynamic_kalman_runtime.py; tests/unit/test_dynamic_kalman_session.py |
 | V680 | Pure Nix backend wrapper init commands ! resolve from closure; `mkdir`/basic setup uses bundled `coreutils`; `nix run` worker/doctor ⊥ depend on host `/usr/bin` before Python entry | flake.nix; tests/unit/test_backend_manifest_doctor.py; B573 |
+| V681 | Dynamic sequence acceptance ! production measurement-session path covers isolated spikes±, sustained step, 3-frame pulse, ramp, biphasic response, dropout gap & session reset; suppression ≥90%, step bias <5%, peak error ≤2 blocks, total latency=2; core report builder ! explicit in-process coverage, CLI-only smoke ⊥ sole evidence | src/eit_app/dynamic_acceptance.py; tests/unit/test_dynamic_acceptance.py; docs/dynamic-kalman-acceptance.md |
 
 ## §T — tasks
 
@@ -1442,6 +1443,8 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T581 | x | Add persistent diagonal Kalman registry and backend-worker realtime postprocess | V674,V675 |
 | T582 | x | Add persistent measurement-space diagonal Kalman + auto/fast fallback for realtime worker | V674,V675,V676,V677,V678,V679 |
 | T583 | x | Bundle core runtime commands for host-independent pure Nix backend wrapper initialization | V673,V680 |
+| T584 | x | Add deterministic dynamic Kalman sequence acceptance report | V674,V675,V676,V681 |
+| T585 | . | Restore default full-suite `src/pyeidors` coverage to ≥87% without lowering gate | V637 |
 
 ## §B — bugs
 
@@ -2020,3 +2023,4 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B571 | 2026-07-10 | packaged wrapper exported `gcc` runtime libs only; no compiler/binutils on `PATH`, so host without gcc failed first FEniCSx/FFCx JIT | V673 |
 | B572 | 2026-07-10 | V622 static test coupled offscreen value directly to next `PATH` token; inserting valid `CC/CXX` wrapper args caused false regression | V622 |
 | B573 | 2026-07-12 | packaged wrapper init executes `mkdir`, but common wrapper `PATH` omitted `coreutils`; stripped-host `nix run` failed before doctor/compiler probes despite bundled GCC | V680 |
+| B574 | 2026-07-12 | post-T583 default suite passed 2017 assertions but `src/pyeidors` coverage remained 86.01%<87%; T584 `src/eit_app` acceptance coverage cannot repair unrelated package-wide debt | V637,T585 |
