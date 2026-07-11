@@ -42,6 +42,21 @@ def _reconstruction_runtime():
     )
 
 
+def _ecd_cwr_runtime():
+    from eit_app.ecd_cwr_simulation import run_ecd_cwr_simulation_request_file
+
+    return run_ecd_cwr_simulation_request_file
+
+
+def _dynamic_kalman_runtime():
+    from eit_app.dynamic_kalman_runtime import (
+        apply_dynamic_kalman_to_reconstruction,
+        dynamic_kalman_registry_command,
+    )
+
+    return apply_dynamic_kalman_to_reconstruction, dynamic_kalman_registry_command
+
+
 def _prime_runtime() -> dict[str, object]:
     """Import heavyweight solver modules without running a solve or FFCx JIT."""
 
@@ -143,6 +158,10 @@ def _serve(_args: argparse.Namespace) -> int:
         request_id = str(message.get("id", ""))
         command = str(message.get("command", ""))
         if command == "shutdown":
+            try:
+                _dynamic_kalman_runtime()[1]("clear")
+            except Exception:
+                pass
             send({"id": request_id, "type": "done", "status": "ok"})
             return 0
 
@@ -187,7 +206,26 @@ def _serve(_args: argparse.Namespace) -> int:
                     output_path = str(message["output"])
                     request = read_reconstruction_request(input_path)
                     result = run_reconstruction_request(request, progress_cb=progress)
+                    result = _dynamic_kalman_runtime()[0](request, result)
                     write_reconstruction_result(output_path, result)
+                elif command in {
+                    "dynamic_kalman_reset",
+                    "dynamic_kalman_close",
+                    "dynamic_kalman_status",
+                    "dynamic_kalman_clear",
+                }:
+                    operation = command.removeprefix("dynamic_kalman_")
+                    metadata = _dynamic_kalman_runtime()[1](
+                        operation,
+                        str(message.get("session_id", "")) or None,
+                    )
+                elif command == "ecd_cwr_simulate_cem":
+                    run_ecd_cwr_simulation_request_file = _ecd_cwr_runtime()
+                    input_path = str(message["input"])
+                    metadata = run_ecd_cwr_simulation_request_file(
+                        input_path,
+                        progress_cb=progress,
+                    )
                 elif command == "prime_runtime":
                     metadata = _prime_runtime()
                 else:
@@ -227,6 +265,11 @@ def main(argv: list[str] | None = None) -> int:
     reconstruct = sub.add_parser("reconstruct", help="Run one reconstruction request.")
     reconstruct.add_argument("--input", required=True)
     reconstruct.add_argument("--output", required=True)
+    ecd_cwr = sub.add_parser(
+        "ecd-cwr-simulate-cem",
+        help="Run one ECD-CWR CEM simulation request.",
+    )
+    ecd_cwr.add_argument("--input", required=True)
     sub.add_parser("serve", help="Run a persistent JSON-lines worker.")
 
     args = parser.parse_args(argv)
@@ -234,6 +277,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_forward(args)
     if args.command == "reconstruct":
         return _run_reconstruct(args)
+    if args.command == "ecd-cwr-simulate-cem":
+        run_ecd_cwr_simulation_request_file = _ecd_cwr_runtime()
+        run_ecd_cwr_simulation_request_file(args.input)
+        return 0
     if args.command == "serve":
         return _serve(args)
     parser.error(f"unknown command: {args.command}")

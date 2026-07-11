@@ -64,10 +64,13 @@ def test_v622_nix_apps_match_dev_launcher_wslg_pyvista_offscreen_default():
     launcher_text = (REPO_ROOT / "scripts" / "gui" / "run_eit_app.sh").read_text(
         encoding="utf-8"
     )
+    wrapper = flake_text.split("makeWrapperArgs = [", 1)[1].split(
+        "] ++ lib.concatLists", 1
+    )[0]
 
     assert "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN:=1" in launcher_text
-    assert '"EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"' in flake_text
-    assert '"1"\n                "--prefix"\n                "PATH"' in flake_text
+    assert '"EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"\n                "1"' in wrapper
+    assert '"--prefix"\n                "PATH"' in wrapper
 
 
 def test_v624_complex_nix_apps_expose_real_worker_profile_commands():

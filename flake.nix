@@ -531,6 +531,7 @@
                 "dolfinx"
                 "pyeidors"
                 "eit_app"
+                "eit_app.ecd_cwr_simulation"
                 "PySide6.QtCore"
                 "pyqtgraph"
                 "pyvista"
@@ -558,11 +559,19 @@
                 "--set-default"
                 "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"
                 "1"
+                "--set"
+                "CC"
+                "${pkgsFor.stdenv.cc}/bin/cc"
+                "--set"
+                "CXX"
+                "${pkgsFor.stdenv.cc}/bin/c++"
                 "--prefix"
                 "PATH"
                 ":"
                 (lib.makeBinPath (
                   [
+                    pkgsFor.coreutils
+                    pkgsFor.stdenv.cc
                     pkgsFor.gmsh
                     pkgsFor.openmpi
                     pkgsFor.fontconfig.bin

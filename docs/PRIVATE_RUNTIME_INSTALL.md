@@ -487,7 +487,7 @@ nix run .#eit-backend-doctor-complex64-cuda -- --profile complex64-cuda --requir
 nix run .#eit-backend-doctor-cuda-amgx -- --profile cuda-amgx --require-gpu --require-amgx --format json
 ```
 
-doctor 会检查 Python/PyEIDORS import、`eit-backend-worker`、JSON-lines worker 协议、Nix、`nvidia-smi`、NVIDIA 驱动版本、CUDA 12.8.1 最低驱动要求和 `sm_61` legacy profile 选择。当前 CUDA 12.8.1 路线要求 Linux NVIDIA driver `>=570.124.06`；Windows driver `>=572.61`。AMGX 路线也按同一 CUDA 12.8.1 驱动门槛检查。
+doctor 会检查 Python/PyEIDORS import、FEniCSx 首次 JIT 所需的 Nix C/C++ 编译器并实际完成编译/链接探针、`eit-backend-worker`、JSON-lines worker 协议、Nix、`nvidia-smi`、NVIDIA 驱动版本、CUDA 12.8.1 最低驱动要求和 `sm_61` legacy profile 选择。纯 Nix worker/doctor wrapper 自带 `stdenv.cc`，不要求 WSL2 另外安装系统 `/usr/bin/gcc`。当前 CUDA 12.8.1 路线要求 Linux NVIDIA driver `>=570.124.06`；Windows driver `>=572.61`。AMGX 路线也按同一 CUDA 12.8.1 驱动门槛检查。
 
 外部 GUI 正常使用禁止默认走：
 

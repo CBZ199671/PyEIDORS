@@ -784,6 +784,15 @@ CLI additions still pending unless named above:
 | V669 | One-step RM GUI voltage-fit ! if full fit Jacobian is not persisted because it is too large, auto-built RM artifact persists measurement-space `fit_matrix=J_raw@RM` and hot path returns finite `simulated` via `fit_matrix @ contracted_dv`; ⊥ successful RM image with missing reconstructed voltage-fit curve | src/pyeidors/inverse/reconstruction_matrix.py; src/eit_app/controllers/reconstruction_controller.py; tests/unit/test_reconstruction_cache_regressions.py; B567 |
 | V670 | Backend doctor subprocess checks ! convert `TimeoutExpired` into same check id status `error` with timeout seconds in message; `--format json` still prints full report; `--no-fail` only exit override | src/eit_app/backend_doctor.py; tests/unit/test_backend_manifest_doctor.py; B568 |
 | V671 | sm61 GUI backend routing ! `EIT_APP_GUI_PRECISION=complex128` + 3D GPU complex request on `*-sm61` runtime routes to CPU `complex` profile with reason `complex128_gpu_unsupported_on_sm61_fallback_cpu`; ⊥ nonexistent `complex-cuda-sm61`, ⊥ silent `complex64` downgrade | src/eit_app/backend_routing.py; tests/unit/test_gui_backend_worker_routing.py; B569 |
+| V672 | Pure Nix backend worker package import check ! include `eit_app.ecd_cwr_simulation`; `nix run .#eit-backend-worker-*-cpu -- ecd-cwr-simulate-cem` ⊥ fail from missing packaged ECD-CWR module | flake.nix; tests/unit/test_backend_manifest_doctor.py; B570 |
+| V673 | Pure Nix FEniCSx JIT toolchain ! every packaged worker/doctor app wrapper exposes Nix `stdenv.cc` via `PATH` + absolute `CC/CXX`; backend doctor compiles+links C/C++ probes; first FFCx JIT ⊥ depend on host `/usr/bin/gcc` or `nix develop` | flake.nix; src/eit_app/backend_doctor.py; tests/unit/test_backend_manifest_doctor.py; B571 |
+| V674 | Dynamic Kalman robust innovation gate ! legacy default remains ungated; NIS reject/inflate acts only on explicit candidate frames, records threshold/action/inflation per frame, and noncandidate frames match legacy filter exactly; persistent physical steps ⊥ rejected by NIS alone | src/pyeidors/inverse/dynamic.py; tests/unit/test_dynamic_kalman.py |
+| V675 | Persistent realtime Kalman ! worker registry keys isolated session id+fingerprint, bounded LRU; online update uses diagonal covariance O(n), `fixed_lag=0`, upstream centered latency=2 => total latency exactly 2 blocks; first/reset update returns finite state and result keeps raw conductivity + NIS/gain/action metadata | src/pyeidors/inverse/dynamic_session.py; src/eit_app/dynamic_kalman_runtime.py; src/eit_app/backend_worker.py; tests/unit/test_dynamic_kalman_session.py |
+| V676 | Persistent measurement Kalman ! `y=Jx+n`, diagonal state covariance, measurement-space innovation solve, channel `R_i∝1/max(w_i,epsilon)`, candidate-only reject/inflate, ordered block updates, `fixed_lag=0`; finite first/reset result & total latency remains upstream 2 | src/pyeidors/inverse/dynamic_session.py; src/eit_app/dynamic_kalman_runtime.py; tests/unit/test_dynamic_kalman_session.py |
+| V677 | Dynamic mode contract `auto\|measurement\|fast_image`; `auto` uses measurement mode only with compatible cached J/state offset & workload budget, else records reason then fast-image fallback; explicit measurement failure ⊥ corrupt session/static reconstruction | src/eit_app/dynamic_kalman_runtime.py; src/eit_app/controllers/reconstruction_controller.py; tests/unit/test_dynamic_kalman_session.py |
+| V678 | RM realtime result may carry ephemeral dynamic J/reference-scale/state-offset context inside process only; result HDF5/JSON metadata ⊥ serialize dense J; persistent dynamic layer reuses controller cache & adds no second long-lived J copy | src/eit_app/controllers/reconstruction_controller.py; src/eit_app/backend_worker_protocol.py; tests/unit/test_dynamic_kalman_session.py |
+| V679 | Measurement diagonal Kalman work/memory = `O(m²n+m³)`/`O(mn+n)` with configurable `m*n` budget; no full `n×n` covariance; output metadata records mode/algorithm/solve ms/fallback & state/measurement sizes | src/pyeidors/inverse/dynamic_session.py; src/eit_app/dynamic_kalman_runtime.py; tests/unit/test_dynamic_kalman_session.py |
+| V680 | Pure Nix backend wrapper init commands ! resolve from closure; `mkdir`/basic setup uses bundled `coreutils`; `nix run` worker/doctor ⊥ depend on host `/usr/bin` before Python entry | flake.nix; tests/unit/test_backend_manifest_doctor.py; B573 |
 
 ## §T — tasks
 
@@ -1428,6 +1437,11 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T576 | x | Bound GN line-search lower-alpha guard scan | V615 |
 | T577 | x | Bound GN preconditioner diagonal clamp detection mask | V616 |
 | T578 | x | Bound GN line-search upper-alpha overflow limit scans | V617 |
+| T579 | x | Bundle + verify FEniCSx JIT compiler in packaged backend apps | V620,V638,V670,V673 |
+| T580 | x | Add candidate-constrained NIS reject/variance-inflation to fixed-lag dynamic Kalman | V674 |
+| T581 | x | Add persistent diagonal Kalman registry and backend-worker realtime postprocess | V674,V675 |
+| T582 | x | Add persistent measurement-space diagonal Kalman + auto/fast fallback for realtime worker | V674,V675,V676,V677,V678,V679 |
+| T583 | x | Bundle core runtime commands for host-independent pure Nix backend wrapper initialization | V673,V680 |
 
 ## §B — bugs
 
@@ -2002,3 +2016,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B567 | 2026-06-20 | 三维 RM 热路径在完整 fit Jacobian 超过预算时仍复用旧 artifact；图像可由 RM@ΔV 重建，但 `simulated` 为空，GUI 边界电压拟合只剩真值曲线 | V669 |
 | B568 | 2026-07-07 | `backend_doctor._run_command` let `TimeoutExpired` escape; worker/nix/nvidia timeout → traceback before JSON report | V670 |
 | B569 | 2026-07-07 | sm61 runtime + complex128 GPU complex route returned nonexistent `complex-cuda`/sm61 package path instead of usable CPU complex fallback | V671 |
+| B570 | 2026-07-07 | ECD-CWR CEM simulation module existed in source/dev tests but pure Nix flake source omitted new untracked module, so packaged backend worker hit `ModuleNotFoundError: No module named 'eit_app.ecd_cwr_simulation'` | V672 |
+| B571 | 2026-07-10 | packaged wrapper exported `gcc` runtime libs only; no compiler/binutils on `PATH`, so host without gcc failed first FEniCSx/FFCx JIT | V673 |
+| B572 | 2026-07-10 | V622 static test coupled offscreen value directly to next `PATH` token; inserting valid `CC/CXX` wrapper args caused false regression | V622 |
+| B573 | 2026-07-12 | packaged wrapper init executes `mkdir`, but common wrapper `PATH` omitted `coreutils`; stripped-host `nix run` failed before doctor/compiler probes despite bundled GCC | V680 |

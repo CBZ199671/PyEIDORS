@@ -578,6 +578,10 @@ def run_dynamic_kalman_filter(
     measurement_noise_hook: Any | None = None,
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
+    innovation_gate: str = "none",
+    innovation_gate_candidates: Any | None = None,
+    innovation_nis_threshold: float | None = None,
+    innovation_max_variance_inflation: float = 1.0e6,
     timestamps: Any | None = None,
     sampling_rate_hz: float | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -588,8 +592,10 @@ def run_dynamic_kalman_filter(
     observations as measurement frames ``y_t``. ``"rm_observation"`` treats
     ``observation_model`` as a reconstruction matrix and first projects
     measurements into state observations ``z_t = RM @ y_t``; the Kalman
-    observation matrix is then identity. This stays a prototype dynamic layer
-    and does not replace the cached RM hot path.
+    observation matrix is then identity. Robust innovation gating is deliberately
+    candidate-constrained: a large innovation alone cannot distinguish a physical
+    step from an isolated outlier. This stays a prototype dynamic layer and does
+    not replace the cached RM hot path.
     """
 
     mode = _kalman_observation_mode(observation_mode)
@@ -612,6 +618,20 @@ def run_dynamic_kalman_filter(
         default_scale=1.0,
     )
     fixed_lag_frames = _nonnegative_int(fixed_lag, name="fixed_lag")
+    gate_policy = _innovation_gate_policy(innovation_gate)
+    gate_candidates = _innovation_gate_candidate_frames(
+        innovation_gate_candidates,
+        n_frames=n_frames,
+    )
+    nis_threshold = _innovation_nis_threshold(
+        innovation_nis_threshold,
+        gate_policy=gate_policy,
+    )
+    max_variance_inflation = _positive_finite_float(
+        innovation_max_variance_inflation,
+        name="innovation_max_variance_inflation",
+        minimum=1.0,
+    )
     times = _optional_timestamps(timestamps, n_frames=n_frames)
     latency_seconds = _latency_seconds(
         fixed_lag_frames,
@@ -624,6 +644,10 @@ def run_dynamic_kalman_filter(
     filtered_states: list[np.ndarray] = []
     filtered_covs: list[np.ndarray] = []
     innovation_norms: list[float] = []
+    innovation_nis_values: list[float] = []
+    innovation_gate_triggered: list[bool] = []
+    innovation_gate_actions: list[str] = []
+    innovation_variance_inflations: list[float] = []
     kalman_gain_norms: list[float] = []
     process_noise_sources: list[str] = []
     measurement_noise_sources: list[str] = []
@@ -656,17 +680,51 @@ def run_dynamic_kalman_filter(
         )
         innovation = projected[frame_idx] - h_t @ x_pred
         innovation_cov = h_t @ p_pred @ h_t.T + r_t
-        kalman_gain = _kalman_gain(p_pred, h_t, innovation_cov)
-        x_filt = x_pred + kalman_gain @ innovation
-        kh = kalman_gain @ h_t
-        i_minus_kh = identity_state.copy()
-        np.subtract(i_minus_kh, kh, out=i_minus_kh)
-        p_filt = i_minus_kh @ p_pred @ i_minus_kh.T + kalman_gain @ r_t @ kalman_gain.T
+        innovation_nis = _normalized_innovation_squared(
+            innovation,
+            innovation_cov,
+        )
+        gate_triggered = bool(
+            gate_policy != "none"
+            and gate_candidates[frame_idx]
+            and innovation_nis > nis_threshold
+        )
+        gate_action = "none"
+        variance_inflation = 1.0
+        if gate_triggered and gate_policy == "reject":
+            kalman_gain = np.zeros(
+                (n_state, h_t.shape[0]),
+                dtype=np.float64,
+            )
+            x_filt = x_pred
+            p_filt = p_pred
+            gate_action = "reject"
+        else:
+            if gate_triggered and gate_policy == "inflate":
+                variance_inflation = min(
+                    max_variance_inflation,
+                    max(1.0, innovation_nis / nis_threshold),
+                )
+                r_t = _symmetrize(r_t * variance_inflation)
+                innovation_cov = h_t @ p_pred @ h_t.T + r_t
+                gate_action = "inflate"
+            kalman_gain = _kalman_gain(p_pred, h_t, innovation_cov)
+            x_filt = x_pred + kalman_gain @ innovation
+            kh = kalman_gain @ h_t
+            i_minus_kh = identity_state.copy()
+            np.subtract(i_minus_kh, kh, out=i_minus_kh)
+            p_filt = (
+                i_minus_kh @ p_pred @ i_minus_kh.T + kalman_gain @ r_t @ kalman_gain.T
+            )
         predicted_states.append(np.ascontiguousarray(x_pred, dtype=np.float64))
         predicted_covs.append(_symmetrize(p_pred))
         filtered_states.append(np.ascontiguousarray(x_filt, dtype=np.float64))
         filtered_covs.append(_symmetrize(p_filt))
         innovation_norms.append(float(np.linalg.norm(innovation)))
+        innovation_nis_values.append(float(innovation_nis))
+        innovation_gate_triggered.append(gate_triggered)
+        innovation_gate_actions.append(gate_action)
+        innovation_variance_inflations.append(float(variance_inflation))
         kalman_gain_norms.append(float(np.linalg.norm(kalman_gain)))
         process_noise_sources.append(q_source)
         measurement_noise_sources.append(r_source)
@@ -717,6 +775,22 @@ def run_dynamic_kalman_filter(
         "measurement_weight_kinds": tuple(contract_kinds),
         "bad_channel_counts": tuple(int(v) for v in bad_counts),
         "innovation_norms": tuple(innovation_norms),
+        "innovation_nis": tuple(innovation_nis_values),
+        "innovation_gate_policy": gate_policy,
+        "innovation_gate_candidates": tuple(bool(v) for v in gate_candidates),
+        "innovation_nis_threshold": None
+        if gate_policy == "none"
+        else float(nis_threshold),
+        "innovation_gate_triggered": tuple(innovation_gate_triggered),
+        "innovation_gate_actions": tuple(innovation_gate_actions),
+        "innovation_variance_inflations": tuple(innovation_variance_inflations),
+        "innovation_gate_count": int(sum(innovation_gate_triggered)),
+        "innovation_reject_count": int(
+            sum(action == "reject" for action in innovation_gate_actions)
+        ),
+        "innovation_inflate_count": int(
+            sum(action == "inflate" for action in innovation_gate_actions)
+        ),
         "kalman_gain_norms": tuple(kalman_gain_norms),
         "covariance_trace_min": float(np.min(cov_trace)) if cov_trace.size else 0.0,
         "covariance_trace_max": float(np.max(cov_trace)) if cov_trace.size else 0.0,
@@ -1550,6 +1624,79 @@ def _kalman_gain(
     except np.linalg.LinAlgError:
         gain_t = np.linalg.pinv(innovation_covariance) @ rhs
     return np.asarray(gain_t.T, dtype=np.float64)
+
+
+def _innovation_gate_policy(value: Any) -> str:
+    resolved = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "": "none",
+        "off": "none",
+        "disabled": "none",
+        "hard": "reject",
+        "hard_reject": "reject",
+        "variance": "inflate",
+        "variance_inflation": "inflate",
+    }
+    resolved = aliases.get(resolved, resolved)
+    if resolved not in {"none", "reject", "inflate"}:
+        raise ValueError("innovation_gate must be 'none', 'reject', or 'inflate'.")
+    return resolved
+
+
+def _innovation_gate_candidate_frames(
+    value: Any | None,
+    *,
+    n_frames: int,
+) -> np.ndarray:
+    if value is None:
+        return np.zeros(int(n_frames), dtype=bool)
+    candidates = np.asarray(value, dtype=bool).reshape(-1)
+    if candidates.size != int(n_frames):
+        raise ValueError(
+            "innovation_gate_candidates length must match observation frames."
+        )
+    return np.ascontiguousarray(candidates, dtype=bool)
+
+
+def _innovation_nis_threshold(
+    value: float | None,
+    *,
+    gate_policy: str,
+) -> float:
+    if gate_policy == "none":
+        return float("inf")
+    if value is None:
+        raise ValueError(
+            "innovation_nis_threshold is required when innovation_gate is enabled."
+        )
+    return _positive_finite_float(value, name="innovation_nis_threshold")
+
+
+def _positive_finite_float(
+    value: Any,
+    *,
+    name: str,
+    minimum: float = 0.0,
+) -> float:
+    resolved = float(value)
+    if not np.isfinite(resolved) or resolved <= 0.0 or resolved < float(minimum):
+        comparator = f">= {minimum:g}" if minimum > 0.0 else "> 0"
+        raise ValueError(f"{name} must be finite and {comparator}.")
+    return resolved
+
+
+def _normalized_innovation_squared(
+    innovation: np.ndarray,
+    innovation_covariance: np.ndarray,
+) -> float:
+    try:
+        whitened = np.linalg.solve(innovation_covariance, innovation)
+    except np.linalg.LinAlgError:
+        whitened = np.linalg.pinv(innovation_covariance) @ innovation
+    value = float(innovation @ whitened)
+    if not np.isfinite(value):
+        raise FloatingPointError("innovation NIS is non-finite.")
+    return max(0.0, value)
 
 
 def _fixed_lag_smoother(

@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -197,6 +198,73 @@ def _import_check(checks: list[dict[str, Any]]) -> None:
             "required runtime imports succeeded",
             imported=imported,
         )
+
+
+def _resolve_compiler(environment_name: str, fallbacks: tuple[str, ...]) -> str | None:
+    configured = os.environ.get(environment_name, "").strip()
+    candidates = ((configured,) if configured else ()) + fallbacks
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _compiler_check(checks: list[dict[str, Any]]) -> None:
+    cc = _resolve_compiler("CC", ("cc", "gcc"))
+    cxx = _resolve_compiler("CXX", ("c++", "g++"))
+    if not cc or not cxx:
+        _check(
+            checks,
+            "fenics-jit-toolchain",
+            "error",
+            "FEniCSx JIT C/C++ compiler toolchain is incomplete",
+            cc=cc,
+            cxx=cxx,
+            CC=os.environ.get("CC"),
+            CXX=os.environ.get("CXX"),
+        )
+        return
+
+    probes = (
+        ("c", cc, "probe.c", "int main(void) { return 0; }\n"),
+        ("c++", cxx, "probe.cpp", "int main() { return 0; }\n"),
+    )
+    with tempfile.TemporaryDirectory(prefix="pyeidors-jit-toolchain-") as directory:
+        probe_root = Path(directory)
+        for language, compiler, source_name, source_text in probes:
+            source_path = probe_root / source_name
+            output_path = probe_root / f"probe-{language}"
+            source_path.write_text(source_text, encoding="utf-8")
+            result = _run_command_safely(
+                [compiler, str(source_path), "-o", str(output_path)],
+                timeout=20.0,
+            )
+            if result.returncode != 0:
+                _check(
+                    checks,
+                    "fenics-jit-toolchain",
+                    "error",
+                    _command_failure_message(
+                        f"FEniCSx JIT {language} compile/link probe", result
+                    ),
+                    language=language,
+                    compiler=compiler,
+                    returncode=result.returncode,
+                    stderr=result.stderr[-2000:],
+                    cc=cc,
+                    cxx=cxx,
+                )
+                return
+
+    _check(
+        checks,
+        "fenics-jit-toolchain",
+        "ok",
+        "FEniCSx JIT C/C++ compiler toolchain compiled and linked probes",
+        cc=cc,
+        cxx=cxx,
+    )
 
 
 def _worker_check(
@@ -482,6 +550,7 @@ def run_doctor(
 
     _nix_check(checks)
     _import_check(checks)
+    _compiler_check(checks)
     _worker_check(
         checks, worker_command, run_protocol_smoke, smoke_timeout=smoke_timeout
     )
@@ -514,6 +583,8 @@ def run_doctor(
             ),
             "PYEIDORS_PETSC_SCALAR_TYPE": os.environ.get("PYEIDORS_PETSC_SCALAR_TYPE"),
             "EIT_APP_GUI_PROFILE": os.environ.get("EIT_APP_GUI_PROFILE"),
+            "CC": os.environ.get("CC"),
+            "CXX": os.environ.get("CXX"),
         },
         "cuda": {
             "toolkitVersion": CUDA_TOOLKIT_VERSION,

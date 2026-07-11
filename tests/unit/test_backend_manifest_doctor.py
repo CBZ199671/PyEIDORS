@@ -63,6 +63,38 @@ def test_backend_manifest_exposes_all_packaged_backend_profiles():
         assert "nix develop" not in profile["workerLaunchCommand"]
 
 
+def test_v672_pure_nix_worker_import_checks_include_ecd_cwr_simulation():
+    flake = (REPO_ROOT / "flake.nix").read_text(encoding="utf-8")
+
+    assert '"eit_app.ecd_cwr_simulation"' in flake
+
+
+def test_v673_pure_nix_runtime_exposes_fenics_jit_toolchain():
+    flake = (REPO_ROOT / "flake.nix").read_text(encoding="utf-8")
+    wrapper = flake.split("makeWrapperArgs = [", 1)[1].split("] ++ lib.concatLists", 1)[
+        0
+    ]
+
+    assert "pkgsFor.stdenv.cc" in wrapper
+    assert (
+        '"--set"\n                "CC"\n'
+        '                "${pkgsFor.stdenv.cc}/bin/cc"' in wrapper
+    )
+    assert (
+        '"--set"\n                "CXX"\n'
+        '                "${pkgsFor.stdenv.cc}/bin/c++"' in wrapper
+    )
+
+
+def test_v680_pure_nix_wrapper_init_bundles_core_runtime_commands():
+    flake = (REPO_ROOT / "flake.nix").read_text(encoding="utf-8")
+    wrapper = flake.split("makeWrapperArgs = [", 1)[1].split("] ++ lib.concatLists", 1)[
+        0
+    ]
+
+    assert "pkgsFor.coreutils" in wrapper
+
+
 def test_backend_manifest_records_cuda_amgx_driver_requirement():
     manifest = json.loads(
         (REPO_ROOT / "pyeidors.backend.json").read_text(encoding="utf-8")
@@ -103,6 +135,55 @@ def test_backend_doctor_parses_nvidia_smi_query_rows():
 
 def _check_by_id(checks, check_id: str):
     return next(item for item in checks if item["id"] == check_id)
+
+
+def test_v673_backend_doctor_reports_missing_fenics_jit_toolchain(
+    monkeypatch,
+):
+    monkeypatch.delenv("CC", raising=False)
+    monkeypatch.delenv("CXX", raising=False)
+    monkeypatch.setattr(backend_doctor.shutil, "which", lambda _command: None)
+    checks = []
+
+    backend_doctor._compiler_check(checks)
+
+    check = _check_by_id(checks, "fenics-jit-toolchain")
+    assert check["status"] == "error"
+    assert "C/C++ compiler toolchain" in check["message"]
+
+
+def test_v673_backend_doctor_compiles_and_links_fenics_jit_probes(monkeypatch):
+    monkeypatch.setenv("CC", "nix-cc")
+    monkeypatch.setenv("CXX", "nix-cxx")
+    compiler_paths = {
+        "nix-cc": "/nix/store/toolchain/bin/cc",
+        "nix-cxx": "/nix/store/toolchain/bin/c++",
+    }
+    monkeypatch.setattr(
+        backend_doctor.shutil,
+        "which",
+        lambda command: compiler_paths.get(command),
+    )
+    commands = []
+
+    def _succeed(args, timeout=10.0, input_text=None):
+        _ = timeout, input_text
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(backend_doctor, "_run_command_safely", _succeed)
+    checks = []
+
+    backend_doctor._compiler_check(checks)
+
+    check = _check_by_id(checks, "fenics-jit-toolchain")
+    assert check["status"] == "ok"
+    assert check["cc"] == "/nix/store/toolchain/bin/cc"
+    assert check["cxx"] == "/nix/store/toolchain/bin/c++"
+    assert [command[0] for command in commands] == [
+        "/nix/store/toolchain/bin/cc",
+        "/nix/store/toolchain/bin/c++",
+    ]
 
 
 def test_backend_doctor_run_command_converts_timeout(monkeypatch):

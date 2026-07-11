@@ -106,6 +106,99 @@ def test_fixed_lag_smoother_records_latency_and_improves_constant_velocity_state
     assert smoothed_rmse <= filtered_rmse
 
 
+def test_v674_candidate_constrained_reject_removes_isolated_spike() -> None:
+    observations = np.array([[0.0], [0.0], [0.0], [20.0], [0.0], [0.0]])
+    candidates = np.array([False, False, False, True, False, False])
+
+    result = run_dynamic_kalman_filter(
+        np.array([[1.0]]),
+        observations,
+        process_noise=0.01,
+        measurement_noise=0.01,
+        initial_state=np.array([0.0]),
+        initial_covariance=0.1,
+        innovation_gate="reject",
+        innovation_gate_candidates=candidates,
+        innovation_nis_threshold=9.0,
+    )
+
+    assert result.filtered[3, 0] == pytest.approx(result.predicted[3, 0])
+    assert result.metadata["innovation_gate_actions"][3] == "reject"
+    assert result.metadata["innovation_gate_count"] == 1
+    assert result.metadata["innovation_reject_count"] == 1
+    assert abs(result.filtered[4, 0]) < 1.0e-12
+
+
+def test_v674_noncandidate_persistent_step_matches_legacy_filter() -> None:
+    observations = np.array([[0.0], [0.0], [1.0], [1.0], [1.0]])
+    kwargs = {
+        "process_noise": 0.05,
+        "measurement_noise": 0.02,
+        "initial_state": np.array([0.0]),
+        "initial_covariance": 0.2,
+    }
+    legacy = run_dynamic_kalman_filter(np.array([[1.0]]), observations, **kwargs)
+    guarded = run_dynamic_kalman_filter(
+        np.array([[1.0]]),
+        observations,
+        innovation_gate="reject",
+        innovation_gate_candidates=np.zeros(observations.shape[0], dtype=bool),
+        innovation_nis_threshold=1.0,
+        **kwargs,
+    )
+
+    np.testing.assert_array_equal(guarded.filtered, legacy.filtered)
+    np.testing.assert_array_equal(guarded.predicted, legacy.predicted)
+    assert guarded.filtered[-1, 0] > 0.9
+    assert guarded.metadata["innovation_gate_count"] == 0
+
+
+def test_v674_variance_inflation_softens_candidate_update() -> None:
+    observations = np.array([[0.0], [0.0], [5.0], [0.0]])
+    candidates = np.array([False, False, True, False])
+    common = {
+        "process_noise": 0.01,
+        "measurement_noise": 0.01,
+        "initial_state": np.array([0.0]),
+        "initial_covariance": 0.1,
+    }
+    legacy = run_dynamic_kalman_filter(np.array([[1.0]]), observations, **common)
+    robust = run_dynamic_kalman_filter(
+        np.array([[1.0]]),
+        observations,
+        innovation_gate="inflate",
+        innovation_gate_candidates=candidates,
+        innovation_nis_threshold=4.0,
+        innovation_max_variance_inflation=100.0,
+        **common,
+    )
+
+    assert abs(robust.filtered[2, 0]) < abs(legacy.filtered[2, 0])
+    assert robust.metadata["innovation_gate_actions"][2] == "inflate"
+    assert robust.metadata["innovation_variance_inflations"][2] > 1.0
+    assert robust.metadata["innovation_inflate_count"] == 1
+
+
+def test_v674_enabled_gate_requires_threshold_and_matching_candidates() -> None:
+    observations = np.zeros((3, 1), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="innovation_nis_threshold is required"):
+        run_dynamic_kalman_filter(
+            np.array([[1.0]]),
+            observations,
+            innovation_gate="reject",
+            innovation_gate_candidates=[False, True, False],
+        )
+    with pytest.raises(ValueError, match="length must match"):
+        run_dynamic_kalman_filter(
+            np.array([[1.0]]),
+            observations,
+            innovation_gate="inflate",
+            innovation_gate_candidates=[True],
+            innovation_nis_threshold=3.0,
+        )
+
+
 def test_rm_observation_shortcut_keeps_online_hot_path_counters_zero() -> None:
     truth = np.array(
         [[0.0, 0.0], [0.2, 0.1], [0.4, 0.3], [0.5, 0.4]],

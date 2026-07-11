@@ -55,6 +55,15 @@ _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
         "solve_spatiotemporal_tv_huber",
         "temporal_difference_operator",
     ),
+    ".dynamic_session": (
+        "DYNAMIC_DIAGONAL_SESSION_SCHEMA",
+        "DYNAMIC_MEASUREMENT_DIAGONAL_SESSION_SCHEMA",
+        "DiagonalKalmanConfig",
+        "DiagonalKalmanUpdate",
+        "PersistentDiagonalKalmanRegistry",
+        "PersistentDiagonalKalmanSession",
+        "PersistentMeasurementDiagonalKalmanSession",
+    ),
     ".greit": (
         "GREIT3DDistribution",
         "GREIT_CACHE_SIGNATURE_SCHEMA",

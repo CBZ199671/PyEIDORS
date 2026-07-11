@@ -24,6 +24,7 @@ from eit_app.backend_worker_protocol import (
     read_forward_request,
     read_reconstruction_result,
     read_reconstruction_request,
+    reconstruction_request_from_payload,
     write_forward_result,
     write_reconstruction_result,
 )
@@ -1483,6 +1484,33 @@ def test_v136_reconstruction_backend_worker_uses_hdf5_protocol_and_profile(
     assert result.metadata["backend_worker_cache_home"].endswith("/v1/cuda/xdg-cache")
 
 
+def test_v637_reconstruction_payload_top_level_weights_enter_metadata() -> None:
+    weights = [1.0, 0.25, 0.0]
+
+    request = reconstruction_request_from_payload(
+        {
+            "reference_frame": {
+                "real": [1.0, 2.0, 3.0],
+                "imag": [0.0, 0.0, 0.0],
+            },
+            "target_frame": {
+                "real": [1.1, 2.1, 3.1],
+                "imag": [0.0, 0.0, 0.0],
+            },
+            "measurement_weight": weights,
+            "metadata": {
+                "measurement_weight_policy": "ecd-cwr-p2-hill-v1",
+            },
+        }
+    )
+
+    assert request.metadata["measurement_weights"] == weights
+    assert request.metadata["measurement_weight_count"] == 3
+    assert request.metadata["measurement_weight_min"] == 0.0
+    assert request.metadata["measurement_weight_max"] == 1.0
+    assert request.metadata["measurement_weight_policy"] == "ecd-cwr-p2-hill-v1"
+
+
 def test_v138_persistent_transport_failure_falls_back_to_one_shot(
     monkeypatch,
     tmp_path,
@@ -2113,6 +2141,37 @@ def test_v334_reconstruction_result_omits_absent_optional_datasets(tmp_path) -> 
     assert loaded.measured is None
     assert loaded.simulated is None
     np.testing.assert_array_equal(loaded.conductivity, np.arange(4, dtype=np.float32))
+
+
+def test_reconstruction_result_writes_nested_condition_number(tmp_path) -> None:
+    output = tmp_path / "reconstruction_result.h5"
+
+    write_reconstruction_result(
+        output,
+        ReconstructionResult(
+            conductivity=np.arange(4, dtype=np.float32),
+            node_coords=np.arange(12, dtype=np.float32).reshape(4, 3),
+            cell_connectivity=np.arange(8, dtype=np.int32).reshape(2, 4),
+            measured=None,
+            simulated=None,
+            metadata={
+                "solver_diagnostics": {
+                    "rm_metadata": {
+                        "condition_estimate": 1234.0,
+                    }
+                }
+            },
+        ),
+    )
+
+    with h5py.File(output, "r") as handle:
+        metadata = json.loads(handle.attrs["metadata_json"])
+        assert metadata["has_condition_number"] is True
+        assert float(handle["condition_number"][()]) == 1234.0
+
+    loaded = read_reconstruction_result(output)
+
+    assert loaded.metadata["condition_number"] == 1234.0
 
 
 def test_v194_persistent_worker_warmup_primes_runtime_once(

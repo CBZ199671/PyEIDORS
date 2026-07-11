@@ -98,7 +98,7 @@ J.T @ W @ J + hp^2 * RtR
 | Measurement temporal filtering | 测量域 EMA / moving average | 便宜，容易上线，适合先降噪 | 会带来峰值延迟，可能抹快波 | 连续测量第一版工具 |
 | T65 4D GN | batch spatiotemporal L2 | 比 rowwise RM 更懂时间连续性 | L2 会平滑突发 | 慢变化 baseline |
 | T66 TV/Huber | 时空稳健正则 | 保波前、保突发、快传导保真更好 | 参数更多，batch solve 更重 | 当前动态保真首选 |
-| T67 Kalman/fixed-lag | 在线低延迟状态估计 | 可控 latency，实时友好 | identity A 保真不足 | 低延迟 fallback |
+| T67 Kalman/fixed-lag | 在线低延迟状态估计 | 可控 latency；支持外部居中候选约束的 NIS reject/方差膨胀；持久 worker 提供 `fast_image` O(n) 与缓存-J `measurement` 对角协方差 session | identity A 保真不足；传播感知 A 仍仅 benchmark；测量域 Q/R 需按实测序列标定 | EitHost 低延迟动态层 |
 | propagation-aware A | Kalman transition 中加入传播速度 | 高噪声下显著增强 Kalman | 目前只接 benchmark，不改默认重建器 | Kalman 增强候选 |
 | T68 propagation-aware prior | 方向、速度、路径先验 | 可表达神经/植物传导结构 | 尚未正式实现 | 后期高级路线 |
 
@@ -106,6 +106,8 @@ J.T @ W @ J + hp^2 * RtR
 
 - 追求保真：优先 T66 TV/Huber。
 - 追求低延迟：Kalman/fixed-lag，最好配 propagation-aware A。
+- NIS 大只能说明观测与预测不一致，不能单独区分真实阶跃和毛刺；reject/inflate 必须由外部 fixed-lag 居中窗口确认候选，默认无门控路径保持旧输出。
+- EitHost 在线路径使用上游居中延迟 2 + worker `lag=0`，总延迟 2；`auto` 优先缓存 Jacobian 的测量域对角协方差更新，模型/预算不满足时退回快速图像域；RTS `fixed_lag=2` 留给离线回放，禁止在线叠加成 4 帧。
 - 植物慢脉冲：T65 4D GN 已经是很稳的 baseline。
 - 神经快传导：T66 + propagation-aware Kalman 组合最值得继续测。
 

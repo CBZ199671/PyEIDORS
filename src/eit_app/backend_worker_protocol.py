@@ -29,6 +29,15 @@ _RECONSTRUCTION_RESULT_SCHEMA = "eit_app_reconstruction_result_h5_v1"
 _DEFAULT_DATASET_COMPRESSION = "lzf"
 _DEFAULT_DATASET_SHUFFLE = True
 _DEFAULT_DATASET_CHUNK_BYTES = 1024 * 1024
+_CONDITION_NUMBER_METADATA_KEYS = frozenset(
+    {
+        "weighted_system_condition_number",
+        "condition_number",
+        "condition_estimate",
+        "system_condition_number",
+        "rm_condition_estimate",
+    }
+)
 
 
 def _encode_json_value(value: Any) -> Any:
@@ -160,6 +169,35 @@ def _read_dataset_array(dataset: h5py.Dataset) -> np.ndarray:
     out = np.empty(dataset.shape, dtype=dataset.dtype, order="C")
     dataset.read_direct(out)
     return out
+
+
+def _condition_number_from_metadata(metadata: Any) -> float | None:
+    def coerce(value: Any) -> float | None:
+        try:
+            scalar = float(np.asarray(value).reshape(-1)[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+        return scalar if np.isfinite(scalar) and scalar >= 1.0 else None
+
+    def search(value: Any) -> float | None:
+        if isinstance(value, dict):
+            for key in _CONDITION_NUMBER_METADATA_KEYS:
+                if key in value:
+                    found = coerce(value[key])
+                    if found is not None:
+                        return found
+            for item in value.values():
+                found = search(item)
+                if found is not None:
+                    return found
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                found = search(item)
+                if found is not None:
+                    return found
+        return None
+
+    return search(metadata)
 
 
 def forward_request_to_payload(request: ForwardSolverRequest) -> dict[str, Any]:
@@ -297,6 +335,7 @@ def reconstruction_request_from_payload(
     from eit_app.controllers.reconstruction_controller import ReconstructionRequest
 
     raw = _decode_json_value(dict(payload))
+    metadata = _reconstruction_metadata_from_payload(raw)
     return ReconstructionRequest(
         reference_frame=frame_from_payload(dict(raw["reference_frame"])),
         target_frame=frame_from_payload(dict(raw["target_frame"])),
@@ -306,8 +345,26 @@ def reconstruction_request_from_payload(
         max_iterations=int(raw.get("max_iterations", 10)),
         mesh_dimension=int(raw.get("mesh_dimension", 2)),
         mesh_refinement=float(raw.get("mesh_refinement", 4.0)),
-        metadata=dict(raw.get("metadata") or {}),
+        metadata=metadata,
     )
+
+
+def _reconstruction_metadata_from_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(raw.get("metadata") or {})
+    for key in ("measurement_weights", "measurement_weight"):
+        if key not in raw or raw[key] is None:
+            continue
+        metadata.setdefault("measurement_weights", raw[key])
+        metadata.setdefault("measurement_weight_count", len(raw[key]))
+        try:
+            values = [float(value) for value in raw[key]]
+        except (TypeError, ValueError):
+            break
+        if values:
+            metadata.setdefault("measurement_weight_min", min(values))
+            metadata.setdefault("measurement_weight_max", max(values))
+        break
+    return metadata
 
 
 def write_reconstruction_request(
@@ -352,22 +409,71 @@ def read_reconstruction_request(path: str | Path) -> ReconstructionRequest:
 
 
 def write_reconstruction_result(path: str | Path, result: ReconstructionResult) -> None:
+    condition_number = _condition_number_from_metadata(result.metadata)
+    dynamic = dict((result.metadata or {}).get("dynamic_kalman") or {})
     metadata = {
         "error_msg": result.error_msg,
         "metadata": _encode_json_value(result.metadata),
         "has_measured": result.measured is not None,
         "has_simulated": result.simulated is not None,
+        "has_condition_number": condition_number is not None,
+        "has_raw_conductivity": result.raw_conductivity is not None,
+        "has_dynamic_kalman": bool(dynamic),
     }
     with h5py.File(path, "w") as handle:
         handle.attrs["schema"] = _RECONSTRUCTION_RESULT_SCHEMA
         handle.attrs["metadata_json"] = _json_dumps(metadata)
         _write_dataset(handle, "conductivity", result.conductivity)
+        if result.raw_conductivity is not None:
+            _write_dataset(handle, "conductivity_raw", result.raw_conductivity)
         _write_dataset(handle, "node_coords", result.node_coords)
         _write_dataset(handle, "cell_connectivity", result.cell_connectivity)
         if result.measured is not None:
             _write_dataset(handle, "measured", result.measured)
         if result.simulated is not None:
             _write_dataset(handle, "simulated", result.simulated)
+        if condition_number is not None:
+            _write_dataset(
+                handle,
+                "condition_number",
+                np.asarray(condition_number, dtype=np.float64),
+            )
+        if dynamic:
+            action_codes = {"initialize": 0, "update": 1, "reject": 2, "inflate": 3}
+            mode_codes = {"fast_image": 0, "measurement": 1}
+            _write_dataset(
+                handle,
+                "dynamic_kalman_action_code",
+                np.asarray(
+                    action_codes.get(str(dynamic.get("action", "")), -1), dtype=np.int32
+                ),
+            )
+            _write_dataset(
+                handle,
+                "dynamic_kalman_mode_code",
+                np.asarray(
+                    mode_codes.get(str(dynamic.get("effective_mode", "")), -1),
+                    dtype=np.int32,
+                ),
+            )
+            _write_dataset(
+                handle,
+                "dynamic_kalman_fallback_code",
+                np.asarray(
+                    int(bool(str(dynamic.get("fallback_reason", "")).strip())),
+                    dtype=np.int32,
+                ),
+            )
+            for dataset_name, metadata_key in (
+                ("dynamic_kalman_nis_per_dof", "innovation_nis_per_dof"),
+                ("dynamic_kalman_gain_mean", "kalman_gain_mean"),
+                ("dynamic_kalman_variance_inflation", "variance_inflation"),
+                ("dynamic_kalman_update_count", "update_count"),
+                ("dynamic_kalman_total_latency_frames", "total_latency_frames"),
+                ("dynamic_kalman_solve_seconds", "solve_seconds"),
+            ):
+                if metadata_key in dynamic and dynamic[metadata_key] is not None:
+                    _write_dataset(handle, dataset_name, dynamic[metadata_key])
 
 
 def read_reconstruction_result(path: str | Path) -> ReconstructionResult:
@@ -387,6 +493,25 @@ def read_reconstruction_result(path: str | Path) -> ReconstructionResult:
             if has_simulated and "simulated" in data
             else None
         )
+        result_metadata = dict(metadata.get("metadata") or {})
+        raw_conductivity = (
+            _read_dataset_array(data["conductivity_raw"])
+            if bool(metadata.get("has_raw_conductivity", False))
+            and "conductivity_raw" in data
+            else None
+        )
+        if (
+            bool(metadata.get("has_condition_number", False))
+            and "condition_number" in data
+        ):
+            result_metadata.setdefault(
+                "condition_number",
+                float(
+                    np.asarray(_read_dataset_array(data["condition_number"])).reshape(
+                        -1
+                    )[0]
+                ),
+            )
         return ReconstructionResult(
             conductivity=_read_dataset_array(data["conductivity"]),
             node_coords=_read_dataset_array(data["node_coords"]),
@@ -394,5 +519,6 @@ def read_reconstruction_result(path: str | Path) -> ReconstructionResult:
             measured=measured,
             simulated=simulated,
             error_msg=metadata.get("error_msg"),
-            metadata=dict(metadata.get("metadata") or {}),
+            metadata=result_metadata,
+            raw_conductivity=raw_conductivity,
         )

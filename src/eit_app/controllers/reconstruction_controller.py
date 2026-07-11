@@ -2064,6 +2064,11 @@ class ReconstructionResult:
     simulated: np.ndarray | None = None
     error_msg: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    raw_conductivity: np.ndarray | None = None
+    dynamic_observation_model: np.ndarray | None = field(default=None, repr=False)
+    dynamic_observation: np.ndarray | None = field(default=None, repr=False)
+    dynamic_measurement_scale: np.ndarray | None = field(default=None, repr=False)
+    dynamic_state_offset: float | complex | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -4760,6 +4765,15 @@ def _try_run_cached_rm_request(
         measured=dv,
         simulated=simulated_dv,
         metadata=result_meta,
+        dynamic_observation_model=inmem_jacobian,
+        dynamic_observation=dv,
+        dynamic_measurement_scale=np.maximum(
+            np.abs(ref_vec),
+            max(1.0e-12, 0.05 * float(np.median(np.abs(ref_vec)))),
+        ),
+        dynamic_state_offset=runtime.background_sigma
+        if output_display_mode == "absolute_sigma"
+        else 0.0,
     )
 
 

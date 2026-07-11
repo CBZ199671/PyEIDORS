@@ -190,6 +190,8 @@
   "capabilities": [
     "serve",
     "reconstruct",
+    "dynamic_kalman_session",
+    "dynamic_measurement_kalman",
     "noser_rm",
     "laplace_rm",
     "curvature_rm",
