@@ -11,13 +11,14 @@ from typing import Any
 import numpy as np
 
 from pyeidors.inverse.dynamic_session import (
+    DYNAMIC_MEASUREMENT_DIAGONAL_SESSION_SCHEMA,
     DiagonalKalmanConfig,
     PersistentDiagonalKalmanRegistry,
     PersistentMeasurementDiagonalKalmanSession,
 )
 
 
-SCHEMA_VERSION = "pyeidors-dynamic-acceptance-v1"
+SCHEMA_VERSION = "pyeidors-dynamic-acceptance-v2"
 STATE_SIZE = 8
 TEMPORAL_BAD_WEIGHT = 0.02
 MINIMUM_ISOLATED_SUPPRESSION = 0.90
@@ -97,6 +98,7 @@ def build_dynamic_acceptance_report() -> dict[str, Any]:
     noncandidate_step_actions = set(step["actions"][5:])
     dropout = by_name["dropout_gap"]
     session_reset = _session_reset_acceptance(config)
+    noser_anchor = _noser_anchor_acceptance(config)
     checks = {
         "isolated_suppression": isolated_suppression >= MINIMUM_ISOLATED_SUPPRESSION,
         "step_bias": step_bias < MAXIMUM_STEP_BIAS,
@@ -108,11 +110,12 @@ def build_dynamic_acceptance_report() -> dict[str, Any]:
         "dropout_gap": max(dropout["block_steps"]) == 2,
         "total_latency": latency_values == {REQUIRED_TOTAL_LATENCY_FRAMES},
         "session_reset": session_reset["passed"],
+        "noser_anchor": noser_anchor["passed"],
     }
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
-        "algorithm_schema": "pyeidors-dynamic-measurement-diagonal-session-v1",
+        "algorithm_schema": DYNAMIC_MEASUREMENT_DIAGONAL_SESSION_SCHEMA,
         "mode": "measurement",
         "thresholds": {
             "minimum_isolated_suppression": MINIMUM_ISOLATED_SUPPRESSION,
@@ -133,6 +136,7 @@ def build_dynamic_acceptance_report() -> dict[str, Any]:
         "noncandidate_step_actions": sorted(noncandidate_step_actions),
         "dropout_max_block_step": max(dropout["block_steps"]),
         "session_reset": session_reset,
+        "noser_anchor": noser_anchor,
         "checks": checks,
         "scenarios": scenarios,
         "passed": all(checks.values()),
@@ -271,6 +275,45 @@ def _session_reset_acceptance(config: DiagonalKalmanConfig) -> dict[str, Any]:
         "reset_action": str(reset.metadata["registry_action"]),
         "reset_update_action": str(reset.metadata["action"]),
         "session_ids": list(registry.session_ids),
+    }
+
+
+def _noser_anchor_acceptance(config: DiagonalKalmanConfig) -> dict[str, Any]:
+    session = PersistentMeasurementDiagonalKalmanSession(
+        fingerprint="dynamic-acceptance:noser-anchor",
+        config=config,
+    )
+    model = np.eye(STATE_SIZE, dtype=np.float64)
+    zeros = np.zeros(STATE_SIZE, dtype=np.float64)
+    session.update(
+        zeros,
+        zeros,
+        model,
+        measurement_scale=np.ones(STATE_SIZE, dtype=np.float64),
+        measurement_weights=np.ones(STATE_SIZE, dtype=np.float64),
+        block_number=1,
+    )
+    static_noser = np.full(STATE_SIZE, 0.1, dtype=np.float64)
+    update = session.update(
+        static_noser,
+        np.full(STATE_SIZE, 10.0, dtype=np.float64),
+        model,
+        measurement_scale=np.ones(STATE_SIZE, dtype=np.float64),
+        measurement_weights=np.ones(STATE_SIZE, dtype=np.float64),
+        block_number=2,
+    )
+    maximum_deviation = float(np.max(np.abs(update.state - static_noser)))
+    minimum_gain = float(update.metadata["static_noser_anchor_gain_min"])
+    passed = (
+        bool(update.metadata["static_noser_anchor_applied"])
+        and minimum_gain >= config.static_noser_anchor_minimum_gain
+        and maximum_deviation <= 0.05
+    )
+    return {
+        "passed": bool(passed),
+        "minimum_gain": minimum_gain,
+        "configured_minimum_gain": float(config.static_noser_anchor_minimum_gain),
+        "maximum_state_deviation_from_static_noser": maximum_deviation,
     }
 
 

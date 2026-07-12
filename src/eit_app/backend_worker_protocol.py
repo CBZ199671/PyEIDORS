@@ -439,7 +439,13 @@ def write_reconstruction_result(path: str | Path, result: ReconstructionResult) 
                 np.asarray(condition_number, dtype=np.float64),
             )
         if dynamic:
-            action_codes = {"initialize": 0, "update": 1, "reject": 2, "inflate": 3}
+            action_codes = {
+                "initialize": 0,
+                "update": 1,
+                "reject": 2,
+                "inflate": 3,
+                "static_guard_reset": 4,
+            }
             mode_codes = {"fast_image": 0, "measurement": 1}
             _write_dataset(
                 handle,

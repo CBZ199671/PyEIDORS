@@ -15,6 +15,9 @@ from pyeidors.inverse.dynamic_session import (
 
 _REGISTRY = PersistentDiagonalKalmanRegistry(max_sessions=16)
 _DEFAULT_MAX_MEASUREMENT_STATE_PRODUCT = 2_000_000
+_DEFAULT_STATIC_GUARD_RMS_RATIO = 1.75
+_DEFAULT_STATIC_GUARD_ROBUST_RATIO = 2.0
+_DEFAULT_STATIC_GUARD_MINIMUM_DEVIATION_RELATIVE = 0.01
 
 
 def apply_dynamic_kalman_to_reconstruction(request: Any, result: Any) -> Any:
@@ -60,6 +63,12 @@ def apply_dynamic_kalman_to_reconstruction(request: Any, result: Any) -> Any:
             innovation_max_variance_inflation=float(
                 metadata.get("dynamic_kalman_max_variance_inflation", 100.0)
             ),
+            static_noser_anchor_relative_std=float(
+                metadata.get("dynamic_kalman_static_noser_anchor_relative_std", 0.10)
+            ),
+            static_noser_anchor_minimum_gain=float(
+                metadata.get("dynamic_kalman_static_noser_anchor_minimum_gain", 0.75)
+            ),
             upstream_latency_frames=int(
                 metadata.get("dynamic_kalman_upstream_latency_frames", 2)
             ),
@@ -81,7 +90,7 @@ def apply_dynamic_kalman_to_reconstruction(request: Any, result: Any) -> Any:
         update = None
         filtered_conductivity = None
         fallback_reason = ""
-        if requested_mode in {"auto", "measurement"}:
+        if requested_mode == "measurement":
             context, fallback_reason = _measurement_context(
                 result,
                 raw_conductivity,
@@ -136,6 +145,9 @@ def apply_dynamic_kalman_to_reconstruction(request: Any, result: Any) -> Any:
                 "requested_mode": requested_mode,
                 "effective_mode": effective_mode,
                 "fallback_reason": fallback_reason,
+                "mode_selection": (
+                    "auto_safe_image" if requested_mode == "auto" else "explicit"
+                ),
                 "max_measurement_state_product": int(
                     metadata.get(
                         "dynamic_kalman_max_measurement_state_product",
@@ -144,6 +156,48 @@ def apply_dynamic_kalman_to_reconstruction(request: Any, result: Any) -> Any:
                 ),
             }
         )
+        if effective_mode == "measurement":
+            guard = _spatial_stability_guard(
+                raw_conductivity,
+                np.asarray(filtered_conductivity, dtype=np.float64),
+                rms_ratio_limit=float(
+                    metadata.get(
+                        "dynamic_kalman_static_guard_rms_ratio",
+                        _DEFAULT_STATIC_GUARD_RMS_RATIO,
+                    )
+                ),
+                robust_ratio_limit=float(
+                    metadata.get(
+                        "dynamic_kalman_static_guard_robust_ratio",
+                        _DEFAULT_STATIC_GUARD_ROBUST_RATIO,
+                    )
+                ),
+                minimum_deviation_relative=float(
+                    metadata.get(
+                        "dynamic_kalman_static_guard_minimum_deviation_relative",
+                        _DEFAULT_STATIC_GUARD_MINIMUM_DEVIATION_RELATIVE,
+                    )
+                ),
+            )
+            dynamic_metadata.update(guard)
+            if bool(guard["spatial_guard_triggered"]):
+                _REGISTRY.reset(session_id)
+                filtered_conductivity = raw_conductivity.copy()
+                fallback_reason = f"spatial_guard:{guard['spatial_guard_reason']}"
+                dynamic_metadata.update(
+                    {
+                        "action": "static_guard_reset",
+                        "fallback_reason": fallback_reason,
+                        "registry_action": "guard_reset",
+                    }
+                )
+        else:
+            dynamic_metadata.update(
+                {
+                    "spatial_guard_triggered": False,
+                    "spatial_guard_reason": "not_measurement_mode",
+                }
+            )
         result.raw_conductivity = raw_conductivity.copy()
         result.conductivity = np.ascontiguousarray(
             filtered_conductivity,
@@ -256,6 +310,77 @@ def _dynamic_mode(value: Any) -> str:
             "dynamic_kalman_mode must be auto, measurement, or fast_image."
         )
     return resolved
+
+
+def _spatial_stability_guard(
+    raw: np.ndarray,
+    filtered: np.ndarray,
+    *,
+    rms_ratio_limit: float,
+    robust_ratio_limit: float,
+    minimum_deviation_relative: float,
+) -> dict[str, float | bool | str]:
+    limits = (rms_ratio_limit, robust_ratio_limit, minimum_deviation_relative)
+    if not all(np.isfinite(value) and value > 0.0 for value in limits):
+        raise ValueError("dynamic Kalman spatial guard limits must be positive.")
+    raw_vector = np.asarray(raw, dtype=np.float64).reshape(-1)
+    filtered_vector = np.asarray(filtered, dtype=np.float64).reshape(-1)
+    if raw_vector.size == 0 or filtered_vector.shape != raw_vector.shape:
+        return {
+            "spatial_guard_triggered": True,
+            "spatial_guard_reason": "shape_mismatch",
+        }
+    if not np.isfinite(filtered_vector).all():
+        return {
+            "spatial_guard_triggered": True,
+            "spatial_guard_reason": "nonfinite_filtered_state",
+        }
+
+    raw_center = float(np.median(raw_vector))
+    filtered_center = float(np.median(filtered_vector))
+    raw_spatial = raw_vector - raw_center
+    filtered_spatial = filtered_vector - filtered_center
+    spatial_delta = filtered_spatial - raw_spatial
+    reference_scale = max(
+        abs(raw_center),
+        float(np.median(np.abs(raw_vector))),
+        1.0e-6,
+    )
+    raw_rms = float(np.sqrt(np.mean(np.square(raw_spatial))))
+    filtered_rms = float(np.sqrt(np.mean(np.square(filtered_spatial))))
+    deviation_relative = float(
+        np.sqrt(np.mean(np.square(spatial_delta))) / reference_scale
+    )
+    raw_robust = float(np.quantile(np.abs(raw_spatial), 0.995))
+    filtered_robust = float(np.quantile(np.abs(filtered_spatial), 0.995))
+    rms_ratio = filtered_rms / max(raw_rms, 0.005 * reference_scale, 1.0e-12)
+    robust_ratio = filtered_robust / max(
+        raw_robust,
+        0.01 * reference_scale,
+        1.0e-12,
+    )
+    triggered = bool(
+        deviation_relative > minimum_deviation_relative
+        and (rms_ratio > rms_ratio_limit or robust_ratio > robust_ratio_limit)
+    )
+    reason = (
+        f"rms_ratio={rms_ratio:.6g};robust_ratio={robust_ratio:.6g};"
+        f"deviation_relative={deviation_relative:.6g}"
+    )
+    return {
+        "spatial_guard_triggered": triggered,
+        "spatial_guard_reason": reason,
+        "spatial_guard_raw_rms": raw_rms,
+        "spatial_guard_filtered_rms": filtered_rms,
+        "spatial_guard_rms_ratio": rms_ratio,
+        "spatial_guard_raw_robust_spread": raw_robust,
+        "spatial_guard_filtered_robust_spread": filtered_robust,
+        "spatial_guard_robust_ratio": robust_ratio,
+        "spatial_guard_deviation_relative": deviation_relative,
+        "spatial_guard_rms_ratio_limit": float(rms_ratio_limit),
+        "spatial_guard_robust_ratio_limit": float(robust_ratio_limit),
+        "spatial_guard_minimum_deviation_relative": float(minimum_deviation_relative),
+    }
 
 
 def _real_vector(value: Any, *, name: str) -> np.ndarray:

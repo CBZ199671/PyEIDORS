@@ -22,7 +22,10 @@ The suite exercises the production
 isolated spikes, a sustained step, a three-frame pulse, a continuous ramp, a
 biphasic response, and a missing-block gap. It also checks candidate-only NIS
 gating, non-candidate step preservation, session reset isolation, and the
-`lag=0` backend metadata contract.
+`lag=0` backend metadata contract. Version 2 also verifies that every accepted
+measurement-space update is fused with the same-frame static NOSER image with
+at least `0.75` anchor gain. Runtime spatial RMS/robust-spread divergence then
+returns the static NOSER image and removes the contaminated session.
 
 Acceptance thresholds:
 
@@ -31,6 +34,7 @@ Acceptance thresholds:
 - ramp/biphasic peak-time error at most two blocks;
 - total latency exactly two blocks (`2` upstream centered blocks + `0` backend);
 - block gaps are represented by `block_step` without unordered state reuse.
+- measurement-space state remains within the NOSER-anchor acceptance bound.
 
 The isolated-spike case models the actual two-stage runtime path. The static
 inverse first consumes the temporal measurement weight, then the measurement

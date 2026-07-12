@@ -13,7 +13,7 @@ import numpy as np
 
 DYNAMIC_DIAGONAL_SESSION_SCHEMA = "pyeidors-dynamic-diagonal-session-v1"
 DYNAMIC_MEASUREMENT_DIAGONAL_SESSION_SCHEMA = (
-    "pyeidors-dynamic-measurement-diagonal-session-v1"
+    "pyeidors-dynamic-measurement-diagonal-session-v2"
 )
 
 
@@ -30,6 +30,8 @@ class DiagonalKalmanConfig:
     innovation_gate: str = "inflate"
     innovation_nis_threshold_per_dof: float = 9.0
     innovation_max_variance_inflation: float = 100.0
+    static_noser_anchor_relative_std: float = 0.10
+    static_noser_anchor_minimum_gain: float = 0.75
     upstream_latency_frames: int = 2
 
     def __post_init__(self) -> None:
@@ -43,6 +45,7 @@ class DiagonalKalmanConfig:
             "measurement_weight_floor": self.measurement_weight_floor,
             "innovation_nis_threshold_per_dof": self.innovation_nis_threshold_per_dof,
             "innovation_max_variance_inflation": self.innovation_max_variance_inflation,
+            "static_noser_anchor_relative_std": self.static_noser_anchor_relative_std,
         }
         for name, value in positive.items():
             if not np.isfinite(value) or float(value) <= 0.0:
@@ -55,6 +58,10 @@ class DiagonalKalmanConfig:
             raise ValueError("maximum_variance must be >= minimum_variance.")
         if self.innovation_max_variance_inflation < 1.0:
             raise ValueError("innovation_max_variance_inflation must be >= 1.")
+        if not np.isfinite(self.static_noser_anchor_minimum_gain) or not (
+            0.0 <= float(self.static_noser_anchor_minimum_gain) <= 1.0
+        ):
+            raise ValueError("static_noser_anchor_minimum_gain must be in [0, 1].")
         if int(self.upstream_latency_frames) < 0:
             raise ValueError("upstream_latency_frames must be nonnegative.")
         object.__setattr__(self, "innovation_gate", _gate_policy(self.innovation_gate))
@@ -338,6 +345,9 @@ class PersistentMeasurementDiagonalKalmanSession:
                 n_measurements=measured.size,
                 solve_seconds=0.0,
                 factor_jitter=0.0,
+                static_anchor_applied=True,
+                static_anchor_gain_mean=1.0,
+                static_anchor_gain_min=1.0,
             )
 
         assert self._covariance is not None
@@ -421,6 +431,19 @@ class PersistentMeasurementDiagonalKalmanSession:
                 )
             )
 
+        static_anchor_applied = action != "reject"
+        static_anchor_gain_mean = 0.0
+        static_anchor_gain_min = 0.0
+        if static_anchor_applied:
+            state, covariance, anchor_gain = _fuse_static_noser_anchor(
+                state,
+                covariance,
+                raw,
+                config=self.config,
+            )
+            static_anchor_gain_mean = float(np.mean(anchor_gain))
+            static_anchor_gain_min = float(np.min(anchor_gain))
+
         self._state = np.ascontiguousarray(state, dtype=np.float64)
         self._covariance = np.ascontiguousarray(
             np.clip(
@@ -444,6 +467,9 @@ class PersistentMeasurementDiagonalKalmanSession:
             n_measurements=measured.size,
             solve_seconds=perf_counter() - started,
             factor_jitter=factor_jitter,
+            static_anchor_applied=static_anchor_applied,
+            static_anchor_gain_mean=static_anchor_gain_mean,
+            static_anchor_gain_min=static_anchor_gain_min,
         )
 
     def _result(
@@ -459,6 +485,9 @@ class PersistentMeasurementDiagonalKalmanSession:
         n_measurements: int,
         solve_seconds: float,
         factor_jitter: float,
+        static_anchor_applied: bool,
+        static_anchor_gain_mean: float,
+        static_anchor_gain_min: float,
     ) -> DiagonalKalmanUpdate:
         assert self._state is not None
         metadata = MappingProxyType(
@@ -492,6 +521,12 @@ class PersistentMeasurementDiagonalKalmanSession:
                 "total_latency_frames": int(self.config.upstream_latency_frames),
                 "solve_seconds": float(solve_seconds),
                 "factor_jitter": float(factor_jitter),
+                "static_noser_anchor_applied": bool(static_anchor_applied),
+                "static_noser_anchor_gain_mean": float(static_anchor_gain_mean),
+                "static_noser_anchor_gain_min": float(static_anchor_gain_min),
+                "static_noser_anchor_relative_std": float(
+                    self.config.static_noser_anchor_relative_std
+                ),
             }
         )
         return DiagonalKalmanUpdate(
@@ -740,6 +775,36 @@ def _measurement_weights(value: Any | None, *, n_measurements: int) -> np.ndarra
     if np.any(weights < 0.0) or np.any(weights > 1.0):
         raise ValueError("measurement_weights must be in [0, 1].")
     return weights
+
+
+def _fuse_static_noser_anchor(
+    state: np.ndarray,
+    covariance: np.ndarray,
+    static_observation: np.ndarray,
+    *,
+    config: DiagonalKalmanConfig,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    anchor_scale = _state_scale(
+        static_observation,
+        None,
+        minimum=config.minimum_scale,
+    )
+    anchor_variance = np.square(config.static_noser_anchor_relative_std * anchor_scale)
+    anchor_gain = covariance / (covariance + anchor_variance)
+    anchor_gain = np.maximum(
+        anchor_gain,
+        float(config.static_noser_anchor_minimum_gain),
+    )
+    anchored_state = state + anchor_gain * (static_observation - state)
+    anchored_covariance = (
+        np.square(1.0 - anchor_gain) * covariance
+        + np.square(anchor_gain) * anchor_variance
+    )
+    return (
+        np.ascontiguousarray(anchored_state, dtype=np.float64),
+        np.ascontiguousarray(anchored_covariance, dtype=np.float64),
+        np.ascontiguousarray(anchor_gain, dtype=np.float64),
+    )
 
 
 def _factor_spd(matrix: np.ndarray) -> tuple[np.ndarray, float]:

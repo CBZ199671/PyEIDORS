@@ -24,6 +24,8 @@ def test_v681_dynamic_acceptance_covers_required_sequences_and_thresholds() -> N
     assert report["noncandidate_step_actions"] == ["update"]
     assert report["dropout_max_block_step"] == 2
     assert report["session_reset"]["passed"] is True
+    assert report["noser_anchor"]["passed"] is True
+    assert report["checks"]["noser_anchor"] is True
     assert {item["name"] for item in report["scenarios"]} == {
         "positive_isolated_spike",
         "negative_isolated_spike",
@@ -41,8 +43,8 @@ def test_v681_dynamic_acceptance_cli_writes_traceable_json(tmp_path) -> None:
     assert main(["--output", str(output)]) == 0
 
     report = json.loads(output.read_text(encoding="utf-8"))
-    assert report["schema_version"] == "pyeidors-dynamic-acceptance-v1"
-    assert report["algorithm_schema"].startswith(
-        "pyeidors-dynamic-measurement-diagonal-session"
+    assert report["schema_version"] == "pyeidors-dynamic-acceptance-v2"
+    assert report["algorithm_schema"] == (
+        "pyeidors-dynamic-measurement-diagonal-session-v2"
     )
     assert report["passed"] is True
