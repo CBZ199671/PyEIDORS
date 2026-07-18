@@ -101,6 +101,39 @@ def test_mesh_fingerprint_is_orientation_invariant_but_tag_sensitive() -> None:
     assert canonical_mesh_fingerprint(moved_nodes, cells, edges) != reference
 
 
+def test_v699_mesh_fingerprint_is_vertex_numbering_invariant() -> None:
+    nodes = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    cells = np.asarray([[0, 1, 2], [1, 3, 2]])
+    edges = np.asarray([[0, 1, 1], [1, 3, 0], [3, 2, 2], [2, 0, 0]])
+    vertex_order = np.asarray([2, 0, 3, 1], dtype=np.int64)
+    source_to_permuted = np.empty(vertex_order.size, dtype=np.int64)
+    source_to_permuted[vertex_order] = np.arange(vertex_order.size, dtype=np.int64)
+
+    reference = canonical_mesh_fingerprint(nodes, cells, edges)
+    permuted = canonical_mesh_fingerprint(
+        nodes[vertex_order],
+        source_to_permuted[cells],
+        np.column_stack((source_to_permuted[edges[:, :2]], edges[:, 2])),
+    )
+
+    assert permuted == reference
+
+
+def test_v699_mesh_fingerprint_rejects_ambiguous_or_invalid_nodes() -> None:
+    nodes = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    cells = np.asarray([[0, 1, 2]])
+    edges = np.asarray([[0, 1, 1], [1, 2, 0], [2, 0, 0]])
+
+    duplicate_nodes = nodes.copy()
+    duplicate_nodes[2] = duplicate_nodes[1]
+    with pytest.raises(ValueError, match="remain unique"):
+        canonical_mesh_fingerprint(duplicate_nodes, cells, edges)
+
+    invalid_cells = np.asarray([[0, 1, 3]])
+    with pytest.raises(ValueError, match="out-of-range"):
+        canonical_mesh_fingerprint(nodes, invalid_cells, edges)
+
+
 def _fair_report(solver: str, fingerprint: str = "a" * 64) -> dict[str, object]:
     return {
         "solver": solver,

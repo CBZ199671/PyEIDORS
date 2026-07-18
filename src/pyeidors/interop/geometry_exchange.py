@@ -277,6 +277,20 @@ def _standard_facet_tags(
         for edge in boundary_edges
     }
 
+    vertex_map = mesh.topology.index_map(0)
+    if vertex_map is None:
+        raise ValueError("Unable to access DOLFINx vertex map for exchange mesh")
+    n_local_vertices = int(vertex_map.size_local + vertex_map.num_ghosts)
+    local_to_source = np.asarray(
+        mesh.geometry.input_global_indices,
+        dtype=np.int64,
+    ).reshape(-1)
+    if local_to_source.size < n_local_vertices:
+        raise ValueError(
+            "DOLFINx geometry input map does not cover all local exchange vertices"
+        )
+    local_to_source = local_to_source[:n_local_vertices]
+
     fdim = int(mesh.topology.dim) - 1
     mesh.topology.create_entities(fdim)
     mesh.topology.create_connectivity(fdim, 0)
@@ -288,11 +302,17 @@ def _standard_facet_tags(
     indices: list[int] = []
     values: list[int] = []
     for facet_idx in range(int(facet_map.size_local)):
-        vertices = tuple(sorted(int(v) for v in facet_to_vertex.links(facet_idx)))
-        if vertices not in boundary_pairs:
+        local_vertices = np.asarray(
+            facet_to_vertex.links(facet_idx),
+            dtype=np.int64,
+        )
+        source_vertices = tuple(
+            sorted(int(value) for value in local_to_source[local_vertices])
+        )
+        if source_vertices not in boundary_pairs:
             continue
         marker = gap_tag
-        vertex_set = set(vertices)
+        vertex_set = set(source_vertices)
         for elec_idx, node_set in enumerate(electrode_sets, start=1):
             if vertex_set.issubset(node_set):
                 marker = elec_idx + 1

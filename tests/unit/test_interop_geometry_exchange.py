@@ -136,6 +136,56 @@ def test_build_mesh_from_exchange_mat_standard_payload(tmp_path: Path) -> None:
     )
 
 
+def test_v698_exchange_facet_tags_survive_dolfinx_vertex_reordering(
+    tmp_path: Path,
+) -> None:
+    n_electrodes = 16
+    n_boundary = 2 * n_electrodes
+    theta = 2.0 * np.pi * np.arange(n_boundary, dtype=np.float64) / n_boundary
+    nodes = np.vstack(
+        (
+            np.zeros((1, 2), dtype=np.float64),
+            np.column_stack((np.cos(theta), np.sin(theta))),
+        )
+    )
+    elems = np.asarray(
+        [[1, 2 + edge, 2 + ((edge + 1) % n_boundary)] for edge in range(n_boundary)],
+        dtype=np.int64,
+    )
+    boundary_edges = np.asarray(
+        [[2 + edge, 2 + ((edge + 1) % n_boundary)] for edge in range(n_boundary)],
+        dtype=np.int64,
+    )
+    electrode_nodes = boundary_edges[::2].copy()
+    payload = make_standard_payload()
+    payload.update(
+        {
+            "nodes": nodes,
+            "elems": elems,
+            "boundary_edges": boundary_edges,
+            "electrode_nodes": electrode_nodes,
+            "electrode_node_counts": np.full(n_electrodes, 2, dtype=np.int64),
+            "n_elec": n_electrodes,
+            "truth_elem_data": np.ones(n_boundary, dtype=np.float64),
+            "mesh_name": "reordered_fan",
+        }
+    )
+    out_mat = tmp_path / "reordered_fan.mat"
+    save_exchange_mat(out_mat, payload)
+
+    mesh, _ = build_mesh_from_exchange_mat(out_mat)
+
+    assert mesh.num_vertices() == 33
+    assert mesh.num_cells() == 32
+    assert mesh.facet_tags is not None
+    assert mesh.facet_tags.indices.size == 32
+    for electrode in range(1, n_electrodes + 1):
+        tag = mesh.association_table[f"electrode_{electrode}"]
+        assert np.count_nonzero(mesh.facet_tags.values == tag) == 1
+    gap_tag = mesh.association_table["gaps"]
+    assert np.count_nonzero(mesh.facet_tags.values == gap_tag) == n_electrodes
+
+
 def test_v300_boundary_edges_direct_fill_without_vstack(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

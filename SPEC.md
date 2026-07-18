@@ -60,6 +60,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - `scripts/benchmarks/benchmark_3d_runtime.py` — `--forward-only on|off`, `--forward-solver-preset 3d_gamg|3d_hypre|spd_gamg|spd_hypre|direct|3d_amg|hypre_boomeramg`, `--forward-mat-solve auto|on|off`, `--petsc-device auto|cpu|cuda`; MUMPS preset retired
 - `scripts/benchmarks/benchmark_difference_runtime.py`
 - `scripts/benchmarks/compare_cem_formulations.py` → PyEIDORS/NGSolve/EIDORS classic-vs-Robin CSV+JSON+plot+report
+- `scripts/benchmarks/cem_high_precision_reference.py prepare|compare` → canonical coarse P1 mesh + independent multiprecision CEM truth + cross-FEM absolute-error CSV/JSON/plot
 - `scripts/diagnostics/probe_petsc_cuda.py` — PETSc CUDA + MPI probe, `--pretty`, `--require cuda`
 - `scripts/diagnostics/benchmark_gui_forward_first_load.py` — GUI-style forward setup/solve timing, `--mode setup|solve|both`, `--profile`, JSON output
 - `scripts/ci/run_sharded_unit_tests.py` — `--shard <name>` | `--all`, `--timeout`, `--report-dir`, per-shard JSON summary
@@ -807,6 +808,14 @@ CLI additions still pending unless named above:
 | V690 | Iterative/direct parity tolerance ! assertion bound ≥ requested KSP `rtol/atol` translated to observed true residual + scalar epsilon floor; ⊥ float64 machine-precision threshold for intentionally inexact GMRES; direct-LU CEM equivalence remains epsilon-scale | tests/unit/test_robin_transconductance_cem.py; src/pyeidors/forward/robin_transconductance.py |
 | V691 | External author reference snapshots ! untouched/untracked `CEM-via-Robin-Boundary/` excluded from project format mutation/gate; Ruff applies project-owned Python only; external notebook format drift ≠ project failure | CEM-via-Robin-Boundary/; Ruff verification command |
 | V692 | Full-suite harness ! outer command timeout ≥ known suite envelope (10 min here) or progress-preserving monitor; exit 124 + post-kill PETSc broken-pipe/MPI abort classified harness timeout, ⊥ test assertion failure | full pytest verification command |
+| V693 | CEM absolute truth independence ! canonical nodes/cells/tagged edges + exact-promoted float64 coordinates/currents → P1 triangle stiffness & electrode boundary mass/coupling/diagonal assembled analytically in `mpmath`; reference ⊥ consume PyEIDORS/PETSc, NGSolve, EIDORS, SciPy, MATLAB assembled matrices | scripts/benchmarks/cem_high_precision_reference.py; tests/unit/test_cem_high_precision_reference.py |
+| V694 | Multiprecision reference certification ! solve identical classic augmented zero-mean CEM @ 80 dps & 128 dps; reference voltage convergence relative L2 ≤`1e-60` + high-precision scaled residual ≤`1e-70`; failure → no solver ranking | scripts/benchmarks/cem_high_precision_reference.py; tests/unit/test_cem_high_precision_reference.py |
+| V695 | Absolute solver accuracy report ! each solver/formulation raw `U` on V687 mesh → `||U-U_mp||/||U_mp||`, max abs, per-RHS error, gauge residual, reduced-system scaled backward residual computed in 128 dps; rank by truth error separately for classic/Robin; fingerprint/dtype/P1/raw-shape mismatch → fail | scripts/benchmarks/cem_high_precision_reference.py; scripts/benchmarks/ngsolve_cem_formulations.py; compare_with_Eidors/compare_cem_formulations.m; tests/unit/test_cem_high_precision_reference.py |
+| V696 | Absolute-accuracy fixture scope ! deterministic 16-electrode fan P1 mesh = 33 nodes/32 triangles/32 boundary edges/1 electrode edge each; same MSH/MAT imported by all; fixture evaluates discrete assembly+solve rounding only, ⊥ continuum-PDE accuracy claim | scripts/benchmarks/cem_high_precision_reference.py; tests/unit/test_cem_high_precision_reference.py; docs/benchmarks/robin_cem_comparison.md |
+| V697 | PowerShell→WSL benchmark probe ! one literal `bash -lc` command or tracked script; ⊥ nested here-doc quoting; launch parse failure → no environment/numerical conclusion | benchmark runbook; B581 |
+| V698 | Exchange facet ID space ! source `boundary_edges`/electrode node ids matched only after DOLFINx local topology vertices → `mesh.geometry.input_global_indices`; ⊥ assume source/local identity; reordered fan fixture must recover 32/32 boundary facets and 1 facet/electrode | src/pyeidors/interop/geometry_exchange.py; tests/unit/test_interop_geometry_exchange.py |
+| V699 | Common-mesh fingerprint ! coordinate-round→lexicographic canonical vertex ids→relabel cells/tagged edges→orientation/row canonical hash; invariant to vertex/cell/edge numbering, sensitive to geometry/topology/electrode labels; duplicate rounded coordinates or out-of-range connectivity → fail | scripts/benchmarks/cem_fair_common.py; tests/unit/test_compare_cem_formulations.py |
+| V700 | Independent NGSolve runtime ! exact 6.2.2606 external env via `uv run --no-project --python /usr/bin/python3 --with ngsolve==6.2.2606 --with scipy`; ⊥ inherit PyEIDORS `==3.13.*` project/Nix interpreter or mutate repo deps; report version+float64 | docs/benchmarks/robin_cem_comparison.md; B586 |
 
 ## §T — tasks
 
@@ -1461,6 +1470,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T586 | x | Anchor measurement Kalman to NOSER + guard/reset divergent state; make auto safe-image | V675,V676,V677,V681,V682 |
 | T587 | x | Add Robin-transconductance CEM + PyEIDORS/NGSolve/EIDORS parity benchmark | V1,V683,V684,V685,V686 |
 | T588 | x | Backprop strict same-mesh/float64 CEM parity + fair cold/warm timing benchmark | V683,V684,V685,V686,V687,V688,V689,V690,V691,V692 |
+| T589 | x | Add independent 80/128-dps CEM truth + absolute PyEIDORS/NGSolve/EIDORS accuracy ranking | V67,V683,V687,V693,V694,V695,V696,V697,V698,V699,V700 |
 
 ## §B — bugs
 
@@ -2046,3 +2056,11 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B578 | 2026-07-19 | Existing Robin PETSc parity test configured GMRES `rtol=1e-8` but float64 branch asserted direct-LU parity at `rtol=1e-10`; observed `1.79e-7` max abs mismatch despite benchmark SciPy-LU equivalence at ~1e-15 | V690 |
 | B579 | 2026-07-19 | Repo-wide Ruff check traversed untouched untracked author notebook `CEM-via-Robin-Boundary/NGSolveEIT/CEM-via-Robin.ipynb` and requested reformat, blocking project verification | V691,T588 |
 | B580 | 2026-07-19 | Full `complex64-cuda` pytest was wrapped in 120 s outer timeout; harness killed buffered run with exit 124, then PETSc reported broken pipe/MPI abort | V692,T588 |
+| B581 | 2026-07-19 | Two read-only Nix probes used nested PowerShell/WSL/bash here-doc quoting; command parse failed before Python, initially obscuring dependency check | V697,T589 |
+| B582 | 2026-07-19 | Absolute-accuracy fan fixture import matched source boundary ids directly against reordered DOLFINx local topology ids: 2/32 direct vs 32/32 through `geometry.input_global_indices`; prepare failed before multiprecision solve | V698,T589 |
+| B583 | 2026-07-19 | Targeted validation stopped before pytest because Ruff format-check found the new V698 regression test unformatted; existing formatting gate is sufficient, then format and rerun | T589 |
+| B584 | 2026-07-19 | PyEIDORS imported the same fan geometry/topology with reordered vertices, but v1 mesh fingerprint hashed raw node order and falsely rejected it; fingerprint must canonicalize the global vertex permutation | V699,T589 |
+| B585 | 2026-07-19 | A post-run JSON probe repeated nested PowerShell/WSL/bash quoting and failed before reading the valid artifact; switched to direct PowerShell UNC JSON/CSV reads | V697,T589 |
+| B586 | 2026-07-19 | First ephemeral NGSolve probe inherited the repo/Nix Python 3.13 and could not load system `libstdc++.so.6`; forcing system Python inside the project then hit `requires-python ==3.13.*`; `--no-project --python /usr/bin/python3` isolated the solver correctly | V700,T589 |
+| B587 | 2026-07-19 | Full complex64-cuda suite executed 2487 tests with 2039 passed/448 skipped and no test failure, but command exited 1 because repository-wide coverage was 86.21% below the pre-existing 87% gate; retain result and rerun identical suite with `--no-cov` for functional exit status | T589 |
+| B588 | 2026-07-19 | First staging attempt met a transient `.git/index.lock`; an initial diagnostic also let PowerShell expand bash `$()`; direct single-process WSL checks then found the lock already absent, so no lock file was deleted | V697,T589 |

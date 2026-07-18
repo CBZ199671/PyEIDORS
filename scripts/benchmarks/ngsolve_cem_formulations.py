@@ -241,6 +241,10 @@ def solve(
                 np.max(np.abs(np.sum(robin_voltage, axis=0)))
             ),
         },
+        "raw_electrode_voltages": {
+            formulation: np.asarray(voltage, dtype=np.float64).tolist()
+            for formulation, voltage in voltages.items()
+        },
         "implementation_note": (
             "NGSolve imports the canonical PyEIDORS P1 mesh and re-hashes its "
             "nodes/cells/tagged edges before assembling A_R/C/D. Both formulations "

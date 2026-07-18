@@ -14,7 +14,7 @@ from scipy.sparse import bmat, csc_matrix, issparse
 from scipy.sparse.linalg import splu
 
 
-MESH_FINGERPRINT_SCHEMA = "cem-p1-mesh-sha256-v1"
+MESH_FINGERPRINT_SCHEMA = "cem-p1-mesh-sha256-v2"
 TIMING_SCOPE = "preassembled_A_R_C_D_blocks"
 
 
@@ -56,11 +56,30 @@ def canonical_mesh_fingerprint(
     if edge_array.ndim != 2 or edge_array.shape[1] != 3:
         raise ValueError("tagged boundary edges must have [v0, v1, electrode_label]")
 
-    canonical_nodes = np.ascontiguousarray(
-        np.round(node_array[:, :2], decimals=12), dtype="<f8"
-    )
-    canonical_cells = _canonical_rows(np.sort(cell_array, axis=1))
-    endpoints = np.sort(edge_array[:, :2], axis=1)
+    rounded_nodes = np.round(node_array[:, :2], decimals=12)
+    rounded_nodes[rounded_nodes == 0.0] = 0.0
+    node_order = np.lexsort((rounded_nodes[:, 1], rounded_nodes[:, 0]))
+    canonical_nodes = np.ascontiguousarray(rounded_nodes[node_order], dtype="<f8")
+    if canonical_nodes.shape[0] > 1 and np.any(
+        np.all(canonical_nodes[1:] == canonical_nodes[:-1], axis=1)
+    ):
+        raise ValueError("nodes must remain unique after 12-decimal canonicalization")
+
+    n_nodes = canonical_nodes.shape[0]
+    for name, connectivity in (
+        ("cells", cell_array),
+        ("tagged boundary edges", edge_array[:, :2]),
+    ):
+        if connectivity.size and (
+            int(np.min(connectivity)) < 0 or int(np.max(connectivity)) >= n_nodes
+        ):
+            raise ValueError(f"{name} connectivity contains out-of-range node ids")
+    source_to_canonical = np.empty(n_nodes, dtype=np.int64)
+    source_to_canonical[node_order] = np.arange(n_nodes, dtype=np.int64)
+    relabelled_cells = source_to_canonical[cell_array]
+    relabelled_endpoints = source_to_canonical[edge_array[:, :2]]
+    canonical_cells = _canonical_rows(np.sort(relabelled_cells, axis=1))
+    endpoints = np.sort(relabelled_endpoints, axis=1)
     canonical_edges = _canonical_rows(np.column_stack((endpoints, edge_array[:, 2])))
 
     digest = hashlib.sha256()

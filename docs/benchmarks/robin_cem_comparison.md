@@ -143,6 +143,69 @@ LU，约慢 21.2%；但缓存建立后，Robin 热求解约快 2.30 倍。PyEIDO
 `0.100/0.220 s` 不再用于性能结论：它们混合了官方 `fwd_solve`、不同组装范围、不同
 网格，以及第二次调用可能命中第一次产生的状态，计时口径不对称。
 
+## 相对 128 位离散真值的绝对精度
+
+为区分“两个公式彼此一致”和“真正接近离散数学精确解”，另建了一个足够小、可做
+多精度 LU 的公共 P1 问题：16 电极、33 顶点、32 个三角形、32 条边界边，每个电极
+恰占一条边。三个求解器均读取同一 MAT/MSH 夹具，均使用 real float64 和 P1。
+
+参考系统不复用任何求解器矩阵，而是把夹具中的 float64 输入按精确二进制有理数提升到
+`mpmath`，解析组装 P1 三角形刚度和线电极质量/耦合项。80 位与 128 位电极电压的相对
+差为 `1.090e-80`，128 位完整系统 scaled residual 为 `2.984e-133`，分别通过
+`1e-60` 和 `1e-70` 的拒绝阈值。
+
+下表的 residual 是把各求解器的电极电压代回 128 位参考 Schur 约化系统后计算的 scaled
+backward residual，因此与真值误差使用同一个离散数学问题。
+
+| 求解器 | 经典 CEM 真值相对误差 | 经典参考系统 residual | Robin 真值相对误差 | Robin 参考系统 residual |
+|---|---:|---:|---:|---:|
+| EIDORS | **1.843e-15** | **1.361e-16** | **2.382e-15** | **1.378e-16** |
+| PyEIDORS/DOLFINx | 2.977e-15 | 1.741e-16 | 2.892e-15 | 1.526e-16 |
+| NGSolve | 2.782e-14 | 1.188e-15 | 2.821e-14 | 1.201e-15 |
+
+因此，在这个固定离散系统和本次运行中，EIDORS 的经典与 Robin 解都最接近 128 位真值，
+PyEIDORS 次之，NGSolve 第三。这个结论只衡量同一粗 P1 离散系统的组装/舍入/求解误差，
+不代表连续 PDE 的网格离散误差，也不应外推为某个求解器在所有网格上恒定更准确。
+
+更重要的是，经典/Robin 内部相对差分别为 PyEIDORS `3.115e-15`、NGSolve
+`1.084e-15`、EIDORS `1.310e-15`。NGSolve 的两个公式彼此最接近，却离 128 位真值最远；
+这直接说明内部一致性只能发现公式实现分歧，不能作为绝对精度排名。
+
+绝对精度夹具和 PyEIDORS 报告：
+
+```bash
+nix develop .#default --command \
+  python scripts/benchmarks/cem_high_precision_reference.py prepare \
+  --output-dir output/cem_absolute_accuracy
+```
+
+NGSolve 使用不继承 PyEIDORS 项目 Python 约束的一次性独立环境：
+
+```bash
+uv run --no-project --python /usr/bin/python3 \
+  --with ngsolve==6.2.2606 --with scipy \
+  python scripts/benchmarks/ngsolve_cem_formulations.py \
+  --output-dir output/cem_absolute_accuracy \
+  --mesh output/cem_absolute_accuracy/common_mesh/cem_absolute_common_p1.msh \
+  --mesh-metadata output/cem_absolute_accuracy/common_mesh/cem_absolute_common_p1.json \
+  --timing-repeats 3
+```
+
+EIDORS 把 `CEM_BENCHMARK_OUTPUT_DIR` 指向 `output/cem_absolute_accuracy`，把
+`CEM_COMMON_MESH_MAT` 指向其中的 `common_mesh/cem_absolute_common_p1.mat`，然后运行
+`compare_with_Eidors/compare_cem_formulations.m`。最后认证和排名：
+
+```bash
+nix develop .#default --command \
+  python scripts/benchmarks/cem_high_precision_reference.py compare \
+  --mesh-mat output/cem_absolute_accuracy/common_mesh/cem_absolute_common_p1.mat \
+  --solver-report output/cem_absolute_accuracy/pyeidors_report.json \
+  --solver-report output/cem_absolute_accuracy/ngsolve_report.json \
+  --solver-report output/cem_absolute_accuracy/eidors_report.json \
+  --output-dir output/cem_absolute_accuracy \
+  --check-dps 80 --primary-dps 128
+```
+
 ## 复现
 
 先在 real float64 Nix profile 中生成公共网格并运行 PyEIDORS：
