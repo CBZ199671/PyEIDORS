@@ -8,6 +8,11 @@ from typing import Any
 _EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
     ".cuda_structured_backend": ("CudaStructuredForwardBackend",),
     ".eit_forward_model": ("EITForwardModel", "LinearBackendConfig"),
+    ".robin_transconductance": (
+        "RobinTransconductanceForwardModel",
+        "normalize_cem_formulation",
+        "zero_sum_helmert_basis",
+    ),
     ".complex_support": (
         "petsc_scalar_dtype",
         "petsc_scalar_dtype_name",

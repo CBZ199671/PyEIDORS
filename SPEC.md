@@ -41,6 +41,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 
 - Top-level `pyeidors`: façade exports `EITSystem`, `check_environment`, `__version__` only; broader solver/forward re-export is not current contract
 - `pyeidors.forward`: `EITForwardModel(n_elec, pattern_config, z, mesh, linear_backend="petsc", backend_config, forward_backend="dolfinx", cache_manager, performance_mode="aggressive")` — CEM forward solve, multi-RHS
+- `pyeidors.forward.RobinTransconductanceForwardModel` → same `forward_solve`/`fwd_solve` shape as `EITForwardModel`; `EITSystem(..., cem_formulation="classic"|"robin_transconductance")`, default=`classic`
 - `pyeidors.forward.LinearBackendConfig` fields: `solver_preset`, `ksp_type`, `pc_type`, `rtol`, `atol`, `max_it`, `reuse_preconditioner`, `monitor`, `mat_solve_mode`, `use_mat_solve`, `petsc_device`, `pc_factor_mat_solver_type`, `pc_hypre_type`, `pc_gamg_type`, `petsc_options`, `forward_pc_refresh_policy`, `forward_pc_refresh_iter_threshold`, `forward_pc_refresh_lag`, `forward_mat_solve_min_patterns`
 - `pyeidors.inverse.jacobian.DirectJacobianCalculator` — `calculate(sigma, method="efficient"|"traditional")`, `linearize(sigma, method="efficient")`, `block_tuning_info()`
 - `pyeidors.inverse.jacobian.JacobianLinearization` — `matvec`, `rmatvec`, `normal_matvec`, `as_linear_operator`, `to_dense`, `hessian_diag(measurement_weights, alpha, regularization_diag, floor)`, `as_petsc_mat`, `assert_compatible(sigma_fingerprint)`; fields `grad_u_all`, `adjoint_gradients`, `cell_areas`, `n_meas_per_stim`, `sign`, `sigma_fingerprint`
@@ -58,6 +59,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - `scripts/run_reconstruction_unified.py` — unified reconstruction runner; `--preconditioner diag|noser|prior|pmat|coarse|custom|petsc-gamg|cholmod|pyamg`
 - `scripts/benchmarks/benchmark_3d_runtime.py` — `--forward-only on|off`, `--forward-solver-preset 3d_gamg|3d_hypre|spd_gamg|spd_hypre|direct|3d_amg|hypre_boomeramg`, `--forward-mat-solve auto|on|off`, `--petsc-device auto|cpu|cuda`; MUMPS preset retired
 - `scripts/benchmarks/benchmark_difference_runtime.py`
+- `scripts/benchmarks/compare_cem_formulations.py` → PyEIDORS/NGSolve/EIDORS classic-vs-Robin CSV+JSON+plot+report
 - `scripts/diagnostics/probe_petsc_cuda.py` — PETSc CUDA + MPI probe, `--pretty`, `--require cuda`
 - `scripts/diagnostics/benchmark_gui_forward_first_load.py` — GUI-style forward setup/solve timing, `--mode setup|solve|both`, `--profile`, JSON output
 - `scripts/ci/run_sharded_unit_tests.py` — `--shard <name>` | `--all`, `--timeout`, `--report-dir`, per-shard JSON summary
@@ -795,6 +797,10 @@ CLI additions still pending unless named above:
 | V680 | Pure Nix backend wrapper init commands ! resolve from closure; `mkdir`/basic setup uses bundled `coreutils`; `nix run` worker/doctor ⊥ depend on host `/usr/bin` before Python entry | flake.nix; tests/unit/test_backend_manifest_doctor.py; B573 |
 | V681 | Dynamic sequence acceptance ! production measurement-session path covers isolated spikes±, sustained step, 3-frame pulse, ramp, biphasic response, dropout gap & session reset; suppression ≥90%, step bias <5%, peak error ≤2 blocks, total latency=2; core report builder ! explicit in-process coverage, CLI-only smoke ⊥ sole evidence | src/eit_app/dynamic_acceptance.py; tests/unit/test_dynamic_acceptance.py; docs/dynamic-kalman-acceptance.md |
 | V682 | Measurement Kalman NOSER safety ! every update fuses same-frame static NOSER as spatial anchor; centered RMS/robust spread guard violation or nonfinite state → raw NOSER output + `static_guard_reset` + registry session removal; no guarded output has stronger unbounded spatial mode, total latency remains 2 | src/pyeidors/inverse/dynamic_session.py; src/eit_app/dynamic_kalman_runtime.py; tests/unit/test_dynamic_kalman_session.py; B575 |
+| V683 | Robin-transconductance CEM ! voltage-driven local Robin block `A_R=K+B`; deterministic zero-sum orthonormal `Q`; reduced map `T_r=Q.T@(D-C.T@A_R^-1@C)@Q`; solve `T_r y=Q.T I`, `U=Qy`, `u=-A_R^-1 C Q y`; full singular `T` ⊥ direct invert; complex reciprocal form uses nonconjugate transpose | src/pyeidors/forward/robin_transconductance.py; tests/unit/test_robin_transconductance_cem.py |
+| V684 | Same mesh/order/scalar/σ/z/pattern direct solve classic-vs-Robin parity ! finite `u/U/meas`; relative L2 ≤`2e-5` for float32/complex64, ≤`1e-10` for float64/complex128; `sum(I)` & `sum(U)` residual bounded; default `cem_formulation=classic` byte-compatible API behavior | tests/unit/test_robin_transconductance_cem.py; tests/integration/test_robin_transconductance_cem_integration.py |
+| V685 | Robin runtime ! ∀ basis RHS share one `A_R` assembly + one KSP setup per σ; state cache isolated by σ/scalar/backend; diagnostics record formulation/rank/condition/residual/cache/fallback; imbalanced current, rank loss, nonfinite/ill-conditioned reduced map → explicit error, ⊥ pseudoinverse concealment | src/pyeidors/forward/robin_transconductance.py; tests/unit/test_robin_transconductance_cem.py |
+| V686 | Cross-FEM CEM comparison ! common physical geometry/σ/z/electrode/stim definitions + explicit mesh/order/integration/solver metadata; report within-solver classic-vs-Robin delta separately from cross-solver delta; primary metrics use raw SI outputs, ⊥ post-hoc scaling hide mismatch; CSV+JSON+Times New Roman plot+Chinese report reproducible | scripts/benchmarks/compare_cem_formulations.py; compare_with_Eidors/compare_cem_formulations.m; tests/unit/test_compare_cem_formulations.py; docs/benchmarks/robin_cem_comparison.md |
 
 ## §T — tasks
 
@@ -1447,6 +1453,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T584 | x | Add deterministic dynamic Kalman sequence acceptance report | V674,V675,V676,V681 |
 | T585 | . | Restore default full-suite `src/pyeidors` coverage to ≥87% without lowering gate | V637 |
 | T586 | x | Anchor measurement Kalman to NOSER + guard/reset divergent state; make auto safe-image | V675,V676,V677,V681,V682 |
+| T587 | x | Add Robin-transconductance CEM + PyEIDORS/NGSolve/EIDORS parity benchmark | V1,V683,V684,V685,V686 |
 
 ## §B — bugs
 

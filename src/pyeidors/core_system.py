@@ -32,6 +32,11 @@ from .forward.complex_support import (
     petsc_scalar_is_complex,
 )
 from .forward.eit_forward_model import EITForwardModel
+from .forward.robin_transconductance import (
+    ROBIN_TRANSCONDUCTANCE_CEM,
+    RobinTransconductanceForwardModel,
+    normalize_cem_formulation,
+)
 from .forward.process_setup_cache import (
     clear_process_forward_setup_cache,
     process_forward_setup_cache_stats,
@@ -297,6 +302,7 @@ class EITSystem(CoreSystemFacadeMixin):
         cache_dir: str = ".pyeidors_cache/v2",
         cache_lifecycle: str | None = None,
         cache_policy: Optional[CachePolicy] = None,
+        cem_formulation: str = "classic",
         **kwargs,
     ) -> None:
         _ = kwargs
@@ -371,6 +377,7 @@ class EITSystem(CoreSystemFacadeMixin):
             default=DEFAULT_MESH_FAMILY,
         )
         self.potential_order = max(1, int(potential_order))
+        self.cem_formulation = normalize_cem_formulation(cem_formulation)
         self.petsc_device = normalize_petsc_device(
             petsc_device, default=DEFAULT_PETSC_DEVICE
         )
@@ -898,7 +905,16 @@ class EITSystem(CoreSystemFacadeMixin):
         ]
         potential_order = max(1, int(getattr(self, "potential_order", 1)))
         self.potential_order = potential_order
-        self.fwd_model = EITForwardModel(
+        cem_formulation = normalize_cem_formulation(
+            getattr(self, "cem_formulation", "classic")
+        )
+        self.cem_formulation = cem_formulation
+        forward_model_class = (
+            RobinTransconductanceForwardModel
+            if cem_formulation == ROBIN_TRANSCONDUCTANCE_CEM
+            else EITForwardModel
+        )
+        self.fwd_model = forward_model_class(
             n_elec=self.n_elec,
             pattern_config=self.pattern_config,
             z=self.contact_impedance,
@@ -913,6 +929,8 @@ class EITSystem(CoreSystemFacadeMixin):
         self.fwd_model._set_backend_diagnostic(
             **self._pattern_config_diagnostics,
             **runtime_policy,
+            cem_formulation_requested=self.cem_formulation,
+            cem_formulation_effective=self.cem_formulation,
         )
         if not initialize_inverse:
             self.reconstructor = None
