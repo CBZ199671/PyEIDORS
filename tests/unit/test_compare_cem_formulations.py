@@ -11,6 +11,12 @@ from scripts.benchmarks.compare_cem_formulations import (
     relative_l2,
     trigonometric_current_patterns,
 )
+from scripts.benchmarks.cem_fair_common import (
+    TIMING_SCOPE,
+    canonical_mesh_fingerprint,
+    timing_summary,
+    validate_solver_reports,
+)
 
 
 def test_trigonometric_patterns_are_balanced_and_labeled() -> None:
@@ -67,8 +73,70 @@ def test_comparison_metrics_separate_formula_and_solver_differences() -> None:
         item["curve_relative_l2_robin_vs_classic"] == 0.0
         for item in metrics["within_solver_formulation"]
     )
-    assert len(metrics["cross_solver_discretization"]) == 2
+    assert len(metrics["cross_solver_implementation"]) == 2
     assert all(
         item["raw_curve_relative_l2"] > 0.0
-        for item in metrics["cross_solver_discretization"]
+        for item in metrics["cross_solver_implementation"]
     )
+
+
+def test_mesh_fingerprint_is_orientation_invariant_but_tag_sensitive() -> None:
+    nodes = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    cells = np.asarray([[0, 1, 2], [1, 3, 2]])
+    edges = np.asarray([[0, 1, 1], [1, 3, 0], [3, 2, 2], [2, 0, 0]])
+
+    reference = canonical_mesh_fingerprint(nodes, cells, edges)
+    permuted = canonical_mesh_fingerprint(
+        nodes,
+        cells[::-1, ::-1],
+        edges[::-1][:, [1, 0, 2]],
+    )
+    retagged = edges.copy()
+    retagged[0, 2] = 2
+
+    assert permuted == reference
+    assert canonical_mesh_fingerprint(nodes, cells, retagged) != reference
+    moved_nodes = nodes.copy()
+    moved_nodes[0, 0] = 1e-5
+    assert canonical_mesh_fingerprint(moved_nodes, cells, edges) != reference
+
+
+def _fair_report(solver: str, fingerprint: str = "a" * 64) -> dict[str, object]:
+    return {
+        "solver": solver,
+        "discretization": {
+            "potential_order": 1,
+            "mesh_fingerprint": fingerprint,
+            "mesh_import_verified": True,
+        },
+        "linear_solver": {"scalar_dtype": "float64"},
+        "timing": {
+            "scope": TIMING_SCOPE,
+            "cross_formulation_cache_reuse": False,
+        },
+    }
+
+
+def test_report_validation_rejects_precision_mesh_and_cache_confounds() -> None:
+    first = _fair_report("first")
+    second = _fair_report("second")
+    assert validate_solver_reports([first, second]) == "a" * 64
+
+    second["linear_solver"]["scalar_dtype"] = "complex64"  # type: ignore[index]
+    with pytest.raises(ValueError, match="float64"):
+        validate_solver_reports([first, second])
+    second = _fair_report("second", fingerprint="b" * 64)
+    with pytest.raises(ValueError, match="fingerprints differ"):
+        validate_solver_reports([first, second])
+    second = _fair_report("second")
+    second["timing"]["cross_formulation_cache_reuse"] = True  # type: ignore[index]
+    with pytest.raises(ValueError, match="reused cache"):
+        validate_solver_reports([first, second])
+
+
+def test_timing_summary_reports_median_and_linear_iqr() -> None:
+    summary = timing_summary([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    assert summary["median"] == 3.0
+    assert summary["iqr"] == 2.0
+    assert summary["samples"] == [1.0, 2.0, 3.0, 4.0, 5.0]

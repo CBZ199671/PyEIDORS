@@ -158,8 +158,8 @@ def test_robin_transconductance_petsc_reuses_one_basis_setup(eit_mesh) -> None:
             "solver_preset": "custom",
             "ksp_type": "gmres",
             "pc_type": "jacobi",
-            "rtol": 1e-8,
-            "atol": 1e-10,
+            "rtol": 1e-12,
+            "atol": 1e-14,
             "max_it": 4000,
             "petsc_device": "cpu",
         },
@@ -172,12 +172,28 @@ def test_robin_transconductance_petsc_reuses_one_basis_setup(eit_mesh) -> None:
     potential_scipy, voltage_scipy = scipy_model.forward_solve(sigma_scipy)
     potential_petsc, voltage_petsc = petsc_model.forward_solve(sigma_petsc)
     rtol, atol = _tolerances(voltage_scipy.dtype)
-    np.testing.assert_allclose(voltage_petsc, voltage_scipy, rtol=rtol, atol=atol)
+    requested_rtol = float(petsc_model.backend_config.rtol)
+    iterative_rtol = max(rtol, 64.0 * requested_rtol)
+    voltage_atol = max(
+        atol,
+        64.0 * requested_rtol * float(np.max(np.abs(voltage_scipy))),
+    )
+    potential_scipy_matrix = np.column_stack(potential_scipy)
+    potential_atol = max(
+        atol,
+        64.0 * requested_rtol * float(np.max(np.abs(potential_scipy_matrix))),
+    )
+    np.testing.assert_allclose(
+        voltage_petsc,
+        voltage_scipy,
+        rtol=iterative_rtol,
+        atol=voltage_atol,
+    )
     np.testing.assert_allclose(
         np.column_stack(potential_petsc),
-        np.column_stack(potential_scipy),
-        rtol=rtol,
-        atol=atol,
+        potential_scipy_matrix,
+        rtol=iterative_rtol,
+        atol=potential_atol,
     )
 
     diagnostics = petsc_model.get_backend_diagnostics()

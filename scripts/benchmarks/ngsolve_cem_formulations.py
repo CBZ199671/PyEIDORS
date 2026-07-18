@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""NGSolve assembly benchmark for classic and Robin CEM formulations.
-
-This is a headless, script form of the author's NGSolve notebook.  NGSolve
-assembles the P2 volume/Robin forms; SciPy SuperLU solves both the augmented
-classic CEM matrix and its Robin Schur complement on exactly those blocks.
-"""
+"""Fair NGSolve P1 float64 classic/Robin CEM benchmark on a shared mesh."""
 
 from __future__ import annotations
 
@@ -13,13 +8,24 @@ import csv
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import re
+import sys
 import time
 
 import ngsolve as ngs
-from netgen.geom2d import SplineGeometry
+from netgen.read_gmsh import ReadGmsh
 import numpy as np
-from scipy.sparse import bmat, csc_matrix, csr_matrix, diags
-from scipy.sparse.linalg import splu
+from scipy.sparse import csr_matrix
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.benchmarks.cem_fair_common import (
+    MESH_FINGERPRINT_SCHEMA,
+    benchmark_preassembled_blocks,
+    canonical_mesh_fingerprint,
+)
 
 
 CSV_FIELDS = (
@@ -40,18 +46,8 @@ class Config:
     conductivity_s_per_m: float = 0.25
     contact_impedance: float = 1.0
     electrode_coverage: float = 0.7
-    maxh_m: float = 0.2
-    arc_subdivisions: int = 12
-    potential_order: int = 2
-
-
-def helmert_basis(count: int) -> np.ndarray:
-    basis = np.zeros((count, count - 1), dtype=float)
-    for column in range(1, count):
-        scale = np.sqrt(float(column * (column + 1)))
-        basis[:column, column - 1] = 1.0 / scale
-        basis[column, column - 1] = -float(column) / scale
-    return basis
+    potential_order: int = 1
+    timing_repeats: int = 11
 
 
 def current_patterns(config: Config) -> tuple[np.ndarray, list[tuple[str, int]]]:
@@ -62,7 +58,7 @@ def current_patterns(config: Config) -> tuple[np.ndarray, list[tuple[str, int]]]
     )
     cosine = np.cos(angles[:, None] * frequencies[None, :])
     sine = np.sin(angles[:, None] * frequencies[None, :])
-    patterns = np.column_stack((cosine, sine))
+    patterns = np.column_stack((cosine, sine)).astype(np.float64, copy=False)
     patterns -= np.mean(patterns, axis=0, keepdims=True)
     labels = [
         *(("cosine", int(k)) for k in frequencies),
@@ -71,97 +67,96 @@ def current_patterns(config: Config) -> tuple[np.ndarray, list[tuple[str, int]]]
     return patterns, labels
 
 
-def add_arc(
-    geometry: SplineGeometry,
-    radius: float,
-    theta_a: float,
-    theta_b: float,
-    boundary_name: str,
-    subdivisions: int,
-) -> None:
-    delta = (theta_b - theta_a) / subdivisions
-    for piece in range(subdivisions):
-        theta_1 = theta_a + piece * delta
-        theta_2 = theta_a + (piece + 1) * delta
-        theta_mid = 0.5 * (theta_1 + theta_2)
-        point_1 = geometry.AppendPoint(
-            radius * np.cos(theta_1), radius * np.sin(theta_1)
-        )
-        point_mid = geometry.AppendPoint(
-            radius * np.cos(theta_mid), radius * np.sin(theta_mid)
-        )
-        point_2 = geometry.AppendPoint(
-            radius * np.cos(theta_2), radius * np.sin(theta_2)
-        )
-        geometry.Append(
-            ["spline3", point_1, point_mid, point_2],
-            bc=boundary_name,
-            leftdomain=1,
-            rightdomain=0,
-        )
-
-
-def make_mesh(config: Config) -> ngs.Mesh:
-    geometry = SplineGeometry()
-    for electrode in range(config.n_electrodes):
-        segment_start = 2.0 * np.pi * electrode / config.n_electrodes
-        segment_stop = 2.0 * np.pi * (electrode + 1) / config.n_electrodes
-        electrode_stop = segment_start + config.electrode_coverage * (
-            segment_stop - segment_start
-        )
-        add_arc(
-            geometry,
-            config.radius_m,
-            segment_start,
-            electrode_stop,
-            f"electrode{electrode + 1}",
-            config.arc_subdivisions,
-        )
-        add_arc(
-            geometry,
-            config.radius_m,
-            electrode_stop,
-            segment_stop,
-            "insulating",
-            config.arc_subdivisions,
-        )
-    geometry.SetMaterial(1, "domain")
-    return ngs.Mesh(geometry.GenerateMesh(maxh=config.maxh_m))
-
-
 def ngsolve_csr(matrix, shape: tuple[int, int]) -> csr_matrix:
     rows, columns, values = matrix.COO()
     return csr_matrix(
         (
-            np.asarray(values, dtype=float),
+            np.asarray(values, dtype=np.float64),
             (np.asarray(rows, dtype=np.int64), np.asarray(columns, dtype=np.int64)),
         ),
         shape=shape,
     )
 
 
-def assemble_blocks(config: Config):
-    mesh = make_mesh(config)
+def _imported_mesh_arrays(mesh: ngs.Mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    points = np.asarray(
+        [tuple(point.p)[:2] for point in mesh.ngmesh.Points()], dtype=np.float64
+    )
+    cells = np.asarray(
+        [
+            [int(vertex.nr) - 1 for vertex in element.vertices]
+            for element in mesh.ngmesh.Elements2D()
+        ],
+        dtype=np.int64,
+    )
+    boundary_names = tuple(mesh.GetBoundaries())
+    edge_rows: list[tuple[int, int, int]] = []
+    for segment in mesh.ngmesh.Elements1D():
+        name = boundary_names[int(segment.index) - 1]
+        match = re.fullmatch(r"electrode_(\d+)", str(name))
+        label = int(match.group(1)) if match else 0
+        vertices = [int(vertex.nr) - 1 for vertex in segment.vertices]
+        edge_rows.append((vertices[0], vertices[1], label))
+    return points, cells, np.asarray(edge_rows, dtype=np.int64)
+
+
+def load_verified_mesh(
+    mesh_path: Path,
+    metadata_path: Path,
+) -> tuple[ngs.Mesh, dict[str, object], float]:
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    started = time.perf_counter()
+    mesh = ngs.Mesh(ReadGmsh(str(mesh_path)))
+    import_seconds = float(time.perf_counter() - started)
+    nodes, cells, edges = _imported_mesh_arrays(mesh)
+    fingerprint = canonical_mesh_fingerprint(nodes, cells, edges)
+    expected = str(metadata["mesh_fingerprint"])
+    if fingerprint != expected:
+        raise RuntimeError(
+            "NGSolve common-mesh fingerprint mismatch: "
+            f"imported={fingerprint}, expected={expected}"
+        )
+    expected_counts = (
+        int(metadata["nodes"]),
+        int(metadata["cells"]),
+        int(metadata["boundary_edges"]),
+    )
+    imported_counts = (nodes.shape[0], cells.shape[0], edges.shape[0])
+    if imported_counts != expected_counts:
+        raise RuntimeError(
+            f"NGSolve imported counts {imported_counts} != expected {expected_counts}"
+        )
+    verification = {
+        "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
+        "mesh_fingerprint": fingerprint,
+        "vertices": int(nodes.shape[0]),
+        "cells": int(cells.shape[0]),
+        "boundary_edges": int(edges.shape[0]),
+    }
+    return mesh, verification, import_seconds
+
+
+def assemble_blocks(config: Config, mesh: ngs.Mesh):
     space = ngs.H1(mesh, order=config.potential_order)
     trial, test = space.TnT()
     robin_form = ngs.BilinearForm(space)
     robin_form += ngs.SymbolicBFI(
         config.conductivity_s_per_m * ngs.grad(trial) * ngs.grad(test)
     )
-    coupling = np.zeros((space.ndof, config.n_electrodes), dtype=float)
-    electrode_diagonal = np.zeros(config.n_electrodes, dtype=float)
+    coupling = np.zeros((space.ndof, config.n_electrodes), dtype=np.float64)
+    electrode_diagonal = np.zeros(config.n_electrodes, dtype=np.float64)
     for electrode in range(config.n_electrodes):
-        boundary = mesh.Boundaries(f"electrode{electrode + 1}")
+        boundary = mesh.Boundaries(f"electrode_{electrode + 1}")
         robin_form += ngs.SymbolicBFI(
             trial * test / config.contact_impedance,
             definedon=boundary,
         )
     robin_form.Assemble()
     for electrode in range(config.n_electrodes):
-        boundary = mesh.Boundaries(f"electrode{electrode + 1}")
+        boundary = mesh.Boundaries(f"electrode_{electrode + 1}")
         linear_form = ngs.LinearForm(space)
         linear_form += ngs.SymbolicLFI(
-            test / config.contact_impedance,
+            -test / config.contact_impedance,
             definedon=boundary,
         )
         linear_form.Assemble()
@@ -170,55 +165,37 @@ def assemble_blocks(config: Config):
             ngs.Integrate(1.0 / config.contact_impedance, mesh, definedon=boundary)
         )
     robin_matrix = ngsolve_csr(robin_form.mat, (space.ndof, space.ndof))
-    return mesh, space, robin_matrix, coupling, electrode_diagonal
+    return space, robin_matrix, coupling, np.diag(electrode_diagonal)
 
 
-def solve(config: Config) -> tuple[list[dict[str, object]], dict[str, object]]:
+def solve(
+    config: Config,
+    mesh_path: Path,
+    metadata_path: Path,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    mesh, mesh_verification, mesh_import_seconds = load_verified_mesh(
+        mesh_path, metadata_path
+    )
     assemble_started = time.perf_counter()
-    mesh, space, robin_matrix, coupling, diagonal = assemble_blocks(config)
-    assemble_seconds = float(time.perf_counter() - assemble_started)
+    space, robin_matrix, coupling, diagonal = assemble_blocks(config, mesh)
+    assembly_seconds = float(time.perf_counter() - assemble_started)
     currents, labels = current_patterns(config)
-    electrode_count = config.n_electrodes
-
-    classic_matrix = bmat(
-        [
-            [robin_matrix, -csc_matrix(coupling), None],
-            [
-                -csc_matrix(coupling.T),
-                diags(diagonal, format="csc"),
-                csc_matrix(np.ones((electrode_count, 1))),
-            ],
-            [
-                None,
-                csc_matrix(np.ones((1, electrode_count))),
-                csc_matrix((1, 1)),
-            ],
-        ],
-        format="csc",
+    timing, voltages, parity = benchmark_preassembled_blocks(
+        robin_matrix,
+        coupling,
+        diagonal,
+        currents,
+        repeats=config.timing_repeats,
     )
-    classic_rhs = np.zeros(
-        (space.ndof + electrode_count + 1, currents.shape[1]), dtype=float
+    timing.update(
+        {
+            "mesh_import_seconds": mesh_import_seconds,
+            "assembly_seconds": assembly_seconds,
+        }
     )
-    classic_rhs[space.ndof : space.ndof + electrode_count, :] = currents
-    classic_started = time.perf_counter()
-    classic_solution = splu(classic_matrix).solve(classic_rhs)
-    classic_seconds = float(time.perf_counter() - classic_started)
-    classic_voltage = classic_solution[space.ndof : space.ndof + electrode_count, :]
-
-    basis = helmert_basis(electrode_count)
-    robin_started = time.perf_counter()
-    robin_factor = splu(robin_matrix.tocsc())
-    response_basis = robin_factor.solve(coupling @ basis)
-    reduced_map = basis.T @ (diagonal[:, None] * basis - coupling.T @ response_basis)
-    coefficients = np.linalg.solve(reduced_map, basis.T @ currents)
-    robin_voltage = basis @ coefficients
-    robin_seconds = float(time.perf_counter() - robin_started)
 
     rows: list[dict[str, object]] = []
-    for formulation, voltage in (
-        ("classic", classic_voltage),
-        ("robin_transconductance", robin_voltage),
-    ):
+    for formulation, voltage in voltages.items():
         for column, (mode, frequency) in enumerate(labels):
             current_norm = float(np.linalg.norm(currents[:, column]))
             voltage_norm = float(np.linalg.norm(voltage[:, column]))
@@ -233,52 +210,41 @@ def solve(config: Config) -> tuple[list[dict[str, object]], dict[str, object]]:
                     "characteristic_resistance_ohm": voltage_norm / current_norm,
                 }
             )
-    voltage_relative_l2 = float(
-        np.linalg.norm(robin_voltage - classic_voltage)
-        / max(float(np.linalg.norm(classic_voltage)), np.finfo(float).eps)
-    )
-    response_residual = float(
-        np.linalg.norm(robin_matrix @ response_basis - coupling @ basis)
-        / max(float(np.linalg.norm(coupling @ basis)), np.finfo(float).eps)
-    )
+    classic_voltage = voltages["classic"]
+    robin_voltage = voltages["robin_transconductance"]
     metadata = {
         "solver": "NGSolve",
         "ngsolve_version": str(ngs.__version__),
         "physical_config": asdict(config),
         "discretization": {
-            "vertices": int(mesh.nv),
-            "elements": int(mesh.ne),
+            **mesh_verification,
             "degrees_of_freedom": int(space.ndof),
-            "element_family": "NGSolve H1",
-            "potential_order": config.potential_order,
+            "element_family": "NGSolve P1 H1 triangle",
+            "potential_order": 1,
             "electrode_integration": "NGSolve boundary SymbolicBFI/SymbolicLFI",
+            "mesh_import_verified": True,
+            "common_mesh_role": "imported Gmsh 2.2",
         },
         "linear_solver": {
             "assembly": "NGSolve",
             "classic": "SciPy SuperLU augmented CEM",
-            "robin": "SciPy SuperLU A_R plus NumPy dense reduced solve",
+            "robin": "SciPy SuperLU A_R plus SciPy dense reduced LU",
             "scalar_dtype": "float64",
         },
+        "timing": timing,
         "within_solver": {
-            "electrode_voltage_relative_l2": voltage_relative_l2,
+            **parity,
             "classic_voltage_balance_max_abs": float(
                 np.max(np.abs(np.sum(classic_voltage, axis=0)))
             ),
             "robin_voltage_balance_max_abs": float(
                 np.max(np.abs(np.sum(robin_voltage, axis=0)))
             ),
-            "assembly_seconds": assemble_seconds,
-            "classic_seconds": classic_seconds,
-            "robin_seconds": robin_seconds,
-        },
-        "robin_diagnostics": {
-            "rank": int(np.linalg.matrix_rank(reduced_map)),
-            "condition_number": float(np.linalg.cond(reduced_map)),
-            "response_relative_residual": response_residual,
         },
         "implementation_note": (
-            "The FEM blocks are assembled by NGSolve from the author's Robin weak "
-            "form; both algebraic formulations are solved from those identical blocks."
+            "NGSolve imports the canonical PyEIDORS P1 mesh and re-hashes its "
+            "nodes/cells/tagged edges before assembling A_R/C/D. Both formulations "
+            "use independent factor states and identical RHS matrices."
         ),
     }
     return rows, metadata
@@ -287,10 +253,17 @@ def solve(config: Config) -> tuple[list[dict[str, object]], dict[str, object]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--mesh", type=Path, required=True)
+    parser.add_argument("--mesh-metadata", type=Path, required=True)
+    parser.add_argument("--timing-repeats", type=int, default=11)
     args = parser.parse_args()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    rows, metadata = solve(Config())
+    rows, metadata = solve(
+        Config(timing_repeats=int(args.timing_repeats)),
+        args.mesh.resolve(),
+        args.mesh_metadata.resolve(),
+    )
     csv_path = output_dir / "ngsolve_characteristic_resistance.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)

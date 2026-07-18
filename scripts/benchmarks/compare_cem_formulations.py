@@ -38,6 +38,28 @@ if str(SRC) not in sys.path:
 from pyeidors.data.structures import PatternConfig
 from pyeidors.forward import EITForwardModel, RobinTransconductanceForwardModel
 from pyeidors.geometry.optimized_mesh_generator import create_eit_mesh
+from pyeidors.interop.geometry_exchange import (
+    STANDARD_INTEROP_FORMAT,
+    build_electrode_arrays,
+    save_exchange_mat,
+)
+
+try:
+    from scripts.benchmarks.cem_fair_common import (
+        MESH_FINGERPRINT_SCHEMA,
+        benchmark_preassembled_blocks,
+        canonical_mesh_fingerprint,
+        validate_solver_reports,
+        write_gmsh22,
+    )
+except ModuleNotFoundError:  # direct execution from scripts/benchmarks
+    from cem_fair_common import (  # type: ignore[no-redef]
+        MESH_FINGERPRINT_SCHEMA,
+        benchmark_preassembled_blocks,
+        canonical_mesh_fingerprint,
+        validate_solver_reports,
+        write_gmsh22,
+    )
 
 
 CSV_FIELDS = (
@@ -60,6 +82,7 @@ class BenchmarkConfig:
     electrode_coverage: float = 0.7
     mesh_refinement: int = 3
     potential_order: int = 1
+    timing_repeats: int = 11
 
 
 def trigonometric_current_patterns(
@@ -126,32 +149,117 @@ def characteristic_rows(
     return rows
 
 
-def _mesh_counts(eit_mesh) -> dict[str, int]:
+def _extract_tagged_boundary_edges(
+    eit_mesh,
+    electrode_tags: list[int],
+) -> np.ndarray:
     mesh = eit_mesh.mesh
-    topology = mesh.topology
-    topology.create_connectivity(topology.dim, 0)
-    cell_map = topology.index_map(topology.dim)
-    vertex_map = topology.index_map(0)
+    fdim = int(mesh.topology.dim) - 1
+    mesh.topology.create_connectivity(fdim, 0)
+    facet_to_vertex = mesh.topology.connectivity(fdim, 0)
+    if facet_to_vertex is None:
+        raise ValueError("mesh is missing facet-to-vertex connectivity")
+    tag_to_label = {
+        int(tag): electrode for electrode, tag in enumerate(electrode_tags, start=1)
+    }
+    rows: list[tuple[int, int, int]] = []
+    for facet, marker in zip(
+        eit_mesh.facet_tags.indices,
+        eit_mesh.facet_tags.values,
+        strict=True,
+    ):
+        vertices = np.asarray(facet_to_vertex.links(int(facet)), dtype=np.int64)
+        if vertices.size != 2:
+            continue
+        rows.append(
+            (
+                int(vertices[0]),
+                int(vertices[1]),
+                int(tag_to_label.get(int(marker), 0)),
+            )
+        )
+    if not rows:
+        raise ValueError("mesh has no tagged boundary edges")
+    return np.asarray(rows, dtype=np.int64)
+
+
+def _export_common_mesh(
+    config: BenchmarkConfig,
+    output_dir: Path,
+    eit_mesh,
+    electrode_tags: list[int],
+    currents: np.ndarray,
+) -> dict[str, Any]:
+    common_dir = output_dir / "common_mesh"
+    nodes = np.asarray(eit_mesh.coordinates(), dtype=np.float64)[:, :2]
+    cells = np.asarray(eit_mesh.cells(), dtype=np.int64)
+    tagged_edges = _extract_tagged_boundary_edges(eit_mesh, electrode_tags)
+    fingerprint = canonical_mesh_fingerprint(nodes, cells, tagged_edges)
+    electrode_nodes, electrode_counts = build_electrode_arrays(eit_mesh)
+    msh_path = common_dir / "cem_common_p1.msh"
+    mat_path = common_dir / "cem_common_p1.mat"
+    json_path = common_dir / "cem_common_p1.json"
+    write_gmsh22(
+        msh_path,
+        nodes,
+        cells,
+        tagged_edges,
+        config.n_electrodes,
+    )
+    payload = {
+        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "source_framework": "PyEIDORS/DOLFINx",
+        "nodes": nodes,
+        "elems": cells + 1,
+        "boundary_edges": tagged_edges[:, :2] + 1,
+        "tagged_boundary_edges": np.column_stack(
+            (tagged_edges[:, :2] + 1, tagged_edges[:, 2])
+        ),
+        "electrode_nodes": electrode_nodes,
+        "electrode_node_counts": electrode_counts,
+        "n_elec": config.n_electrodes,
+        "background": config.conductivity_s_per_m,
+        "truth_elem_data": np.full(cells.shape[0], config.conductivity_s_per_m),
+        "contact_impedance": config.contact_impedance,
+        "mesh_name": "cem_common_p1",
+        "mesh_level": f"refinement_{config.mesh_refinement}",
+        "scenario_name": "homogeneous_cem_formulation_comparison",
+        "electrode_coverage": config.electrode_coverage,
+        "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
+        "mesh_fingerprint": fingerprint,
+        "current_patterns": np.asarray(currents, dtype=np.float64),
+    }
+    save_exchange_mat(mat_path, payload)
+    metadata = {
+        "schema": "cem-common-mesh-v1",
+        "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
+        "mesh_fingerprint": fingerprint,
+        "nodes": int(nodes.shape[0]),
+        "cells": int(cells.shape[0]),
+        "boundary_edges": int(tagged_edges.shape[0]),
+        "electrode_edges": {
+            str(electrode): int(np.count_nonzero(tagged_edges[:, 2] == electrode))
+            for electrode in range(1, config.n_electrodes + 1)
+        },
+        "potential_order": 1,
+        "scalar_dtype": "float64",
+        "msh": str(msh_path),
+        "mat": str(mat_path),
+    }
+    write_json(json_path, metadata)
     return {
-        "vertices": int(vertex_map.size_global),
-        "cells": int(cell_map.size_global),
+        **metadata,
+        "nodes_array": nodes,
+        "cells_array": cells,
+        "tagged_edges_array": tagged_edges,
+        "msh_path": msh_path,
+        "mat_path": mat_path,
+        "json_path": json_path,
     }
 
 
-def run_pyeidors(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
-    """Run same-mesh classic/Robin PyEIDORS comparison and write raw data."""
-
-    mesh_dir = output_dir / "mesh"
-    mesh_dir.mkdir(parents=True, exist_ok=True)
-    eit_mesh = create_eit_mesh(
-        n_elec=config.n_electrodes,
-        radius=config.radius_m,
-        refinement=config.mesh_refinement,
-        electrode_coverage=config.electrode_coverage,
-        output_dir=str(mesh_dir),
-        mesh_name="cem_formulation_disk",
-    )
-    pattern_config = PatternConfig(
+def _pattern_config(config: BenchmarkConfig) -> PatternConfig:
+    return PatternConfig(
         n_elec=config.n_electrodes,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
@@ -161,55 +269,113 @@ def run_pyeidors(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
         use_meas_current=False,
         rotate_meas=True,
     )
-    impedance = np.full(config.n_electrodes, config.contact_impedance, dtype=float)
+
+
+def _assemble_pyeidors_blocks(model: EITForwardModel, sigma: fem.Function):
+    electrode = model._ensure_electrode_matrix().tocsr()
+    conductivity_petsc = model._assemble_conductivity_matrix(sigma)
+    try:
+        conductivity = model._petsc_to_csr(conductivity_petsc).astype(
+            np.float64, copy=False
+        )
+    finally:
+        destroy = getattr(conductivity_petsc, "destroy", None)
+        if callable(destroy):
+            destroy()
+    dofs = int(model.dofs)
+    electrode_stop = dofs + model.n_elec
+    robin_matrix = conductivity + electrode[:dofs, :dofs]
+    coupling = electrode[:dofs, dofs:electrode_stop]
+    electrode_matrix = electrode[dofs:electrode_stop, dofs:electrode_stop]
+    return robin_matrix, coupling, electrode_matrix
+
+
+def run_pyeidors(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
+    """Run strict float64/common-P1-mesh classic/Robin PyEIDORS benchmark."""
+
+    mesh_dir = output_dir / "mesh_source"
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    mesh_started = time.perf_counter()
+    eit_mesh = create_eit_mesh(
+        n_elec=config.n_electrodes,
+        radius=config.radius_m,
+        refinement=config.mesh_refinement,
+        electrode_coverage=config.electrode_coverage,
+        output_dir=str(mesh_dir),
+        mesh_name="cem_formulation_disk",
+    )
+    mesh_seconds = float(time.perf_counter() - mesh_started)
+    impedance = np.full(config.n_electrodes, config.contact_impedance, dtype=np.float64)
+    setup_started = time.perf_counter()
     classic = EITForwardModel(
         n_elec=config.n_electrodes,
-        pattern_config=pattern_config,
+        pattern_config=_pattern_config(config),
         z=impedance,
         mesh=eit_mesh,
         potential_order=config.potential_order,
         linear_backend="scipy",
     )
-    robin = RobinTransconductanceForwardModel(
-        n_elec=config.n_electrodes,
-        pattern_config=pattern_config,
-        z=impedance,
-        mesh=eit_mesh,
-        potential_order=config.potential_order,
-        linear_backend="scipy",
-    )
+    model_setup_seconds = float(time.perf_counter() - setup_started)
+    scalar_dtype = np.dtype(classic.scalar_dtype)
+    if scalar_dtype != np.dtype(np.float64):
+        raise RuntimeError(
+            "Fair CEM comparison requires PyEIDORS real float64; "
+            f"active PETSc scalar dtype is {scalar_dtype}. "
+            "Run this benchmark in `nix develop .#default`."
+        )
     sigma_classic = fem.Function(classic.V_sigma)
-    sigma_robin = fem.Function(robin.V_sigma)
     sigma_classic.x.array[:] = config.conductivity_s_per_m
-    sigma_robin.x.array[:] = config.conductivity_s_per_m
     currents, labels = trigonometric_current_patterns(
         config.n_electrodes,
         config.electrode_coverage,
     )
-
-    classic_started = time.perf_counter()
-    potential_classic, voltage_classic_rows = classic.forward_solve(
-        sigma_classic,
-        currents.T,
-    )
-    classic_seconds = float(time.perf_counter() - classic_started)
-    robin_started = time.perf_counter()
-    potential_robin, voltage_robin_rows = robin.forward_solve(
-        sigma_robin,
-        currents.T,
-    )
-    robin_seconds = float(time.perf_counter() - robin_started)
-
-    voltage_classic = np.asarray(voltage_classic_rows).T
-    voltage_robin = np.asarray(voltage_robin_rows).T
-    potential_classic_matrix = np.column_stack(potential_classic)
-    potential_robin_matrix = np.column_stack(potential_robin)
-    rows = characteristic_rows(
-        "PyEIDORS/DOLFINx",
-        "classic",
+    common_mesh = _export_common_mesh(
+        config,
+        output_dir,
+        eit_mesh,
+        list(classic.electrode_tags),
         currents,
-        voltage_classic,
-        labels,
+    )
+
+    assembly_started = time.perf_counter()
+    robin_matrix, coupling, electrode_matrix = _assemble_pyeidors_blocks(
+        classic, sigma_classic
+    )
+    assembly_seconds = float(time.perf_counter() - assembly_started)
+    timing, voltages, parity = benchmark_preassembled_blocks(
+        robin_matrix,
+        coupling,
+        electrode_matrix,
+        currents,
+        repeats=config.timing_repeats,
+    )
+    timing.update(
+        {
+            "mesh_generation_seconds": mesh_seconds,
+            "model_setup_seconds": model_setup_seconds,
+            "assembly_seconds": assembly_seconds,
+        }
+    )
+    voltage_classic = voltages["classic"]
+    voltage_robin = voltages["robin_transconductance"]
+
+    production_robin = RobinTransconductanceForwardModel(
+        n_elec=config.n_electrodes,
+        pattern_config=_pattern_config(config),
+        z=impedance,
+        mesh=eit_mesh,
+        potential_order=config.potential_order,
+        linear_backend="scipy",
+    )
+    sigma_robin = fem.Function(production_robin.V_sigma)
+    sigma_robin.x.array[:] = config.conductivity_s_per_m
+    _, production_classic_rows = classic.forward_solve(sigma_classic, currents.T)
+    _, production_robin_rows = production_robin.forward_solve(sigma_robin, currents.T)
+    production_classic = np.asarray(production_classic_rows, dtype=np.float64).T
+    production_robin_values = np.asarray(production_robin_rows, dtype=np.float64).T
+
+    rows = characteristic_rows(
+        "PyEIDORS/DOLFINx", "classic", currents, voltage_classic, labels
     )
     rows.extend(
         characteristic_rows(
@@ -221,40 +387,43 @@ def run_pyeidors(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
         )
     )
     write_rows(output_dir / "pyeidors_characteristic_resistance.csv", rows)
-
-    diagnostics = robin.get_backend_diagnostics()
+    diagnostics = production_robin.get_backend_diagnostics()
     report = {
         "solver": "PyEIDORS/DOLFINx",
         "physical_config": asdict(config),
         "discretization": {
-            **_mesh_counts(eit_mesh),
-            "element_family": "Lagrange triangle",
-            "potential_order": config.potential_order,
+            "vertices": common_mesh["nodes"],
+            "cells": common_mesh["cells"],
+            "degrees_of_freedom": int(classic.dofs),
+            "element_family": "DOLFINx P1 Lagrange triangle",
+            "potential_order": 1,
             "conductivity_order": int(classic.V_sigma.ufl_element().degree),
             "electrode_integration": "DOLFINx facet forms",
+            "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
+            "mesh_fingerprint": common_mesh["mesh_fingerprint"],
+            "mesh_import_verified": True,
+            "common_mesh_role": "canonical source",
         },
         "linear_solver": {
             "classic": "SciPy SuperLU on augmented CEM matrix",
-            "robin": "one SciPy SuperLU factorization of A_R plus reduced dense LU",
-            "scalar_dtype": str(voltage_classic.dtype),
+            "robin": "SciPy SuperLU A_R plus SciPy dense reduced LU",
+            "scalar_dtype": "float64",
         },
+        "timing": timing,
         "within_solver": {
-            "electrode_voltage_relative_l2": relative_l2(
-                voltage_robin,
-                voltage_classic,
-            ),
-            "body_potential_relative_l2": relative_l2(
-                potential_robin_matrix,
-                potential_classic_matrix,
-            ),
+            **parity,
             "classic_voltage_balance_max_abs": float(
                 np.max(np.abs(np.sum(voltage_classic, axis=0)))
             ),
             "robin_voltage_balance_max_abs": float(
                 np.max(np.abs(np.sum(voltage_robin, axis=0)))
             ),
-            "classic_seconds": classic_seconds,
-            "robin_seconds": robin_seconds,
+            "production_classic_vs_block_classic_relative_l2": relative_l2(
+                production_classic, voltage_classic
+            ),
+            "production_robin_vs_block_robin_relative_l2": relative_l2(
+                production_robin_values, voltage_robin
+            ),
         },
         "robin_diagnostics": {
             key: diagnostics.get(key)
@@ -272,7 +441,15 @@ def run_pyeidors(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
         },
         "artifacts": {
             "csv": "pyeidors_characteristic_resistance.csv",
+            "common_mesh_msh": str(common_mesh["msh_path"].relative_to(output_dir)),
+            "common_mesh_mat": str(common_mesh["mat_path"].relative_to(output_dir)),
+            "common_mesh_json": str(common_mesh["json_path"].relative_to(output_dir)),
         },
+        "implementation_note": (
+            "Production classic and Robin implementations are validated against the "
+            "same independently timed A_R/C/D algebraic kernels; validation calls are "
+            "excluded from timing."
+        ),
     }
     write_json(output_dir / "pyeidors_report.json", report)
     return report
@@ -477,8 +654,103 @@ def comparison_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             )
     return {
         "within_solver_formulation": within_solver,
-        "cross_solver_discretization": cross_solver,
+        "cross_solver_implementation": cross_solver,
     }
+
+
+def _timing_rows(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        solver = str(report["solver"])
+        timing = report["timing"]
+        for formulation in ("classic", "robin_transconductance"):
+            formulation_timing = timing[formulation]
+            for phase in ("cold", "warm"):
+                summary = formulation_timing[f"{phase}_seconds"]
+                rows.append(
+                    {
+                        "solver": solver,
+                        "formulation": formulation,
+                        "phase": phase,
+                        "median_seconds": float(summary["median"]),
+                        "iqr_seconds": float(summary["iqr"]),
+                        "repeats": int(timing["repeats"]),
+                        "rhs_count": int(timing["rhs_count"]),
+                    }
+                )
+    return rows
+
+
+def _write_timing_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+    fieldnames = (
+        "solver",
+        "formulation",
+        "phase",
+        "median_seconds",
+        "iqr_seconds",
+        "repeats",
+        "rhs_count",
+    )
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _plot_timings(rows: list[dict[str, Any]], output_path: Path) -> None:
+    configure_fonts()
+    solvers = sorted({str(row["solver"]) for row in rows})
+    formulations = ("classic", "robin_transconductance")
+    figure, axes = plt.subplots(1, 2, figsize=(11.0, 4.6), constrained_layout=True)
+    width = 0.36
+    positions = np.arange(len(solvers), dtype=float)
+    for axis, phase in zip(axes, ("cold", "warm"), strict=True):
+        for offset_index, formulation in enumerate(formulations):
+            selected = {
+                str(row["solver"]): row
+                for row in rows
+                if row["phase"] == phase and row["formulation"] == formulation
+            }
+            medians = [float(selected[solver]["median_seconds"]) for solver in solvers]
+            errors = [
+                float(selected[solver]["iqr_seconds"]) / 2.0 for solver in solvers
+            ]
+            offset = (offset_index - 0.5) * width
+            axis.bar(
+                positions + offset,
+                medians,
+                width,
+                yerr=errors,
+                capsize=3,
+                label=formulation,
+            )
+        axis.set_title(f"{phase.capitalize()} solve")
+        axis.set_ylabel("Seconds for all RHS")
+        axis.set_yscale("log")
+        axis.set_xticks(positions, solvers, rotation=12, ha="right")
+        axis.grid(True, axis="y", alpha=0.25)
+        axis.legend(fontsize=8)
+        for label in axis.get_xticklabels() + axis.get_yticklabels():
+            label.set_fontname("Times New Roman")
+    figure.savefig(output_path, dpi=220)
+    plt.close(figure)
+
+
+def _timing_metrics(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    metrics = []
+    for report in reports:
+        timing = report["timing"]
+        item: dict[str, Any] = {"solver": report["solver"]}
+        for phase in ("cold", "warm"):
+            classic = float(timing["classic"][f"{phase}_seconds"]["median"])
+            robin = float(
+                timing["robin_transconductance"][f"{phase}_seconds"]["median"]
+            )
+            item[f"{phase}_classic_over_robin"] = classic / max(
+                robin, np.finfo(float).eps
+            )
+        metrics.append(item)
+    return metrics
 
 
 def aggregate(
@@ -491,28 +763,47 @@ def aggregate(
         rows.extend(read_rows(path))
     if not rows:
         raise ValueError("at least one benchmark CSV is required")
+    metadata: list[dict[str, Any]] = []
+    for path in metadata_paths:
+        metadata.append(json.loads(path.read_text(encoding="utf-8")))
+    common_fingerprint = validate_solver_reports(metadata)
     combined_csv = output_dir / "cem_formulation_comparison.csv"
     write_rows(combined_csv, rows)
     plot_path = output_dir / "cem_formulation_comparison.png"
     plot_rows(rows, plot_path)
-    metadata: list[dict[str, Any]] = []
-    for path in metadata_paths:
-        metadata.append(json.loads(path.read_text(encoding="utf-8")))
+    timing_rows = _timing_rows(metadata)
+    timing_csv = output_dir / "cem_formulation_timing.csv"
+    _write_timing_rows(timing_csv, timing_rows)
+    timing_plot = output_dir / "cem_formulation_timing.png"
+    _plot_timings(timing_rows, timing_plot)
     report = {
         "generated_at_utc": datetime.now(UTC).isoformat(),
         "host": platform.platform(),
         "comparison_policy": {
             "within_solver": "same assembled FEM model; classic versus Robin",
-            "cross_solver": "raw SI characteristic resistance; no fitted scaling",
+            "cross_solver": (
+                "same canonical P1 mesh/fingerprint, float64, physical parameters, "
+                "current RHS, and gauge; raw SI values with no fitted scaling"
+            ),
             "gauge": "zero-mean electrode voltage",
             "transpose": "non-conjugate transpose for reciprocal complex systems",
+            "timing": (
+                "preassembled A_R/C/D blocks; independent formulation state; cold "
+                "factorization and warm own-cache solves reported separately"
+            ),
         },
+        "common_mesh_fingerprint": common_fingerprint,
         "input_csvs": [str(path) for path in csv_paths],
         "solver_reports": metadata,
-        "metrics": comparison_metrics(rows),
+        "metrics": {
+            **comparison_metrics(rows),
+            "timing": _timing_metrics(metadata),
+        },
         "artifacts": {
             "combined_csv": combined_csv.name,
             "plot": plot_path.name,
+            "timing_csv": timing_csv.name,
+            "timing_plot": timing_plot.name,
         },
     }
     write_json(output_dir / "cem_formulation_comparison.json", report)
@@ -545,6 +836,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="NGSolve/EIDORS JSON metadata to include; may be repeated",
     )
+    parser.add_argument(
+        "--timing-repeats",
+        type=int,
+        default=11,
+        help="cold and warm timing repetitions per formulation",
+    )
     return parser
 
 
@@ -555,7 +852,10 @@ def main(argv: list[str] | None = None) -> int:
     csv_paths = [path.resolve() for path in args.external_csv]
     metadata_paths = [path.resolve() for path in args.external_report]
     if not args.skip_pyeidors:
-        run_pyeidors(BenchmarkConfig(), output_dir)
+        run_pyeidors(
+            BenchmarkConfig(timing_repeats=int(args.timing_repeats)),
+            output_dir,
+        )
         csv_paths.insert(0, output_dir / "pyeidors_characteristic_resistance.csv")
         metadata_paths.insert(0, output_dir / "pyeidors_report.json")
     aggregate(output_dir, csv_paths, metadata_paths)

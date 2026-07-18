@@ -1,4 +1,4 @@
-%% Compare EIDORS classic CEM with its Robin-transconductance Schur form
+%% Fair EIDORS P1 float64 classic/Robin CEM benchmark on the common mesh
 clc; clear; close all;
 
 eidorsStartup = 'D:\Program Files\MATLAB\R2023b\toolbox\eidors-v3.12-ng\eidors\startup.m';
@@ -10,77 +10,100 @@ if exist('eidors_default', 'file') ~= 2
     end
 end
 
-config.n_electrodes = 16;
+out_dir = getenv('CEM_BENCHMARK_OUTPUT_DIR');
+if isempty(out_dir)
+    script_dir = fileparts(mfilename('fullpath'));
+    out_dir = fullfile(fileparts(script_dir), 'output', 'cem_formulation_comparison');
+end
+if exist(out_dir, 'dir') ~= 7
+    mkdir(out_dir);
+end
+mesh_mat = getenv('CEM_COMMON_MESH_MAT');
+if isempty(mesh_mat)
+    mesh_mat = fullfile(out_dir, 'common_mesh', 'cem_common_p1.mat');
+end
+if exist(mesh_mat, 'file') ~= 2
+    error('Common mesh MAT file not found: %s', mesh_mat);
+end
+payload = load(mesh_mat);
+
+config.n_electrodes = double(payload.n_elec);
 config.radius_m = 4.0;
-config.conductivity_s_per_m = 0.25;
-config.contact_impedance = 1.0;
-config.electrode_coverage = 0.7;
-config.maxh_m = 0.10;
+config.conductivity_s_per_m = double(payload.background);
+config.contact_impedance = double(payload.contact_impedance);
+config.electrode_coverage = double(payload.electrode_coverage);
 config.potential_order = 1;
+config.timing_repeats = 11;
+repeat_override = str2double(getenv('CEM_TIMING_REPEATS'));
+if isfinite(repeat_override) && repeat_override >= 3
+    config.timing_repeats = floor(repeat_override);
+end
 
+nodes = double(payload.nodes);
+elems = double(payload.elems);
+boundary_edges = double(payload.boundary_edges);
+electrode_nodes = double(payload.electrode_nodes);
+electrode_counts = double(payload.electrode_node_counts(:));
+currents = double(payload.current_patterns);
 L = config.n_electrodes;
-k = 1:(L / 2);
-electrode_index = (0:(L - 1))';
-mid_theta = 2 * pi * (electrode_index + config.electrode_coverage / 2) / L;
-I_cos = cos(mid_theta * k);
-I_sin = sin(mid_theta * k);
-currents = [I_cos, I_sin];
-currents = currents - mean(currents, 1);
+if size(currents, 1) ~= L
+    error('Current matrix must have %d electrode rows.', L);
+end
 
-electrode_size = 2 * pi * config.radius_m / L * config.electrode_coverage;
-electrode_positions = [rad2deg(mid_theta), zeros(L, 1)];
-fmdl = ng_mk_cyl_models( ...
-    [0, config.radius_m, config.maxh_m], ...
-    electrode_positions, ...
-    [electrode_size, 0, 1]);
+fmdl = eidors_obj('fwd_model', 'shared_pyeidors_cem_p1');
+fmdl.nodes = nodes;
+fmdl.elems = elems;
+fmdl.boundary = boundary_edges;
+fmdl.gnd_node = choose_ground_node(nodes, electrode_nodes, electrode_counts);
+fmdl.solve = @fwd_solve_1st_order;
+fmdl.system_mat = @system_mat_1st_order;
+fmdl.jacobian = @jacobian_adjoint;
+fmdl.normalize_measurements = 0;
 for electrode = 1:L
+    active_nodes = electrode_nodes(electrode, 1:electrode_counts(electrode));
+    fmdl.electrode(electrode).nodes = active_nodes(active_nodes > 0);
     fmdl.electrode(electrode).z_contact = config.contact_impedance;
 end
-fmdl.normalize_measurements = 0;
 for pattern = 1:size(currents, 2)
     stimulation(pattern).stim_pattern = sparse(currents(:, pattern)); %#ok<SAGROW>
     stimulation(pattern).meas_pattern = speye(L); %#ok<SAGROW>
 end
 fmdl.stimulation = stimulation;
+mesh_import_verified = isequal(fmdl.nodes, nodes) && ...
+    isequal(fmdl.elems, elems) && isequal(fmdl.boundary, boundary_edges) && ...
+    size(fmdl.electrode, 2) == L;
+if ~mesh_import_verified
+    error('EIDORS did not preserve the imported common mesh exactly.');
+end
+
 img = mk_image(fmdl, config.conductivity_s_per_m);
 img.fwd_solve.get_all_nodes = 1;
-
-classic_started = tic;
-classic_data = fwd_solve(img);
-classic_seconds = toc(classic_started);
-classic_voltage = reshape(classic_data.meas, L, []);
-classic_voltage = classic_voltage - mean(classic_voltage, 1);
-
+assembly_started = tic;
 system_matrix = calc_system_mat(img);
+assembly_seconds = toc(assembly_started);
 E = system_matrix.E;
-n_nodes = size(fmdl.nodes, 1);
+n_nodes = size(nodes, 1);
 expected_size = n_nodes + L;
-if size(E, 1) ~= expected_size
-    error('Expected %d node/electrode unknowns, got %d.', expected_size, size(E, 1));
+if size(E, 1) ~= expected_size || size(E, 2) ~= expected_size
+    error('Expected a %d-by-%d EIDORS CEM matrix.', expected_size, expected_size);
 end
 A_R = E(1:n_nodes, 1:n_nodes);
 C = E(1:n_nodes, (n_nodes + 1):(n_nodes + L));
 D = E((n_nodes + 1):(n_nodes + L), (n_nodes + 1):(n_nodes + L));
 
-Q = zeros(L, L - 1);
-for column = 1:(L - 1)
-    scale = sqrt(column * (column + 1));
-    Q(1:column, column) = 1 / scale;
-    Q(column + 1, column) = -column / scale;
-end
+[timing, classic_potential, classic_voltage, robin_potential, robin_voltage] = ...
+    benchmark_preassembled_blocks(A_R, C, D, currents, config.timing_repeats);
+timing.assembly_seconds = assembly_seconds;
+timing.mesh_import_seconds = 0;
 
-robin_started = tic;
-response_basis = A_R \ (C * Q);
-reduced_map = Q.' * (D * Q - C.' * response_basis);
-reduced_coefficients = reduced_map \ (Q.' * currents);
-robin_voltage = Q * reduced_coefficients;
-robin_seconds = toc(robin_started);
+voltage_relative_l2 = relative_l2(robin_voltage, classic_voltage);
+potential_relative_l2 = relative_l2(robin_potential, classic_potential);
+official_data = fwd_solve(img);
+official_voltage = reshape(official_data.meas, L, []);
+official_voltage = official_voltage - mean(official_voltage, 1);
+official_classic_relative_l2 = relative_l2(official_voltage, classic_voltage);
 
-voltage_relative_l2 = norm(robin_voltage - classic_voltage, 'fro') / ...
-    max(norm(classic_voltage, 'fro'), eps);
-response_relative_residual = norm(A_R * response_basis - C * Q, 'fro') / ...
-    max(norm(C * Q, 'fro'), eps);
-
+k = 1:(L / 2);
 solver_column = strings(2 * size(currents, 2), 1);
 formulation_column = strings(2 * size(currents, 2), 1);
 mode_column = strings(2 * size(currents, 2), 1);
@@ -116,47 +139,45 @@ end
 results = table( ...
     solver_column, formulation_column, mode_column, frequency_column, ...
     current_norm_column, voltage_norm_column, resistance_column, ...
-    'VariableNames', {
+    'VariableNames', { ...
         'solver', 'formulation', 'mode', 'spatial_frequency', ...
         'current_norm_a', 'voltage_norm_v', 'characteristic_resistance_ohm'});
-
-out_dir = getenv('CEM_BENCHMARK_OUTPUT_DIR');
-if isempty(out_dir)
-    script_dir = fileparts(mfilename('fullpath'));
-    out_dir = fullfile(fileparts(script_dir), 'output', 'cem_formulation_comparison');
-end
-if exist(out_dir, 'dir') ~= 7
-    mkdir(out_dir);
-end
 writetable(results, fullfile(out_dir, 'eidors_characteristic_resistance.csv'));
 save(fullfile(out_dir, 'eidors_raw_voltages.mat'), ...
-    'currents', 'classic_voltage', 'robin_voltage', '-v7');
+    'currents', 'classic_voltage', 'robin_voltage', ...
+    'classic_potential', 'robin_potential', '-v7');
 
 report.solver = 'EIDORS';
 report.eidors_version = eidors_obj('eidors_version');
 report.interpreter_version = eidors_obj('interpreter_version');
 report.physical_config = config;
-report.discretization.nodes = size(fmdl.nodes, 1);
-report.discretization.elements = size(fmdl.elems, 1);
-report.discretization.element_family = 'EIDORS first-order triangle';
-report.discretization.potential_order = config.potential_order;
+report.discretization.vertices = size(nodes, 1);
+report.discretization.cells = size(elems, 1);
+report.discretization.boundary_edges = size(boundary_edges, 1);
+report.discretization.degrees_of_freedom = n_nodes;
+report.discretization.element_family = 'EIDORS P1 triangle';
+report.discretization.potential_order = 1;
 report.discretization.electrode_integration = 'EIDORS system_mat_fields CEM';
-report.linear_solver.classic = 'EIDORS fwd_solve_1st_order';
-report.linear_solver.robin = 'MATLAB sparse backslash A_R plus reduced map';
+report.discretization.mesh_fingerprint_schema = char(payload.mesh_fingerprint_schema);
+report.discretization.mesh_fingerprint = char(payload.mesh_fingerprint);
+report.discretization.mesh_import_verified = mesh_import_verified;
+report.discretization.common_mesh_role = 'imported MAT connectivity';
+report.linear_solver.classic = 'MATLAB sparse LU on augmented CEM matrix';
+report.linear_solver.robin = 'MATLAB sparse A_R LU plus dense reduced LU';
 report.linear_solver.scalar_dtype = 'float64';
+report.timing = timing;
 report.within_solver.electrode_voltage_relative_l2 = voltage_relative_l2;
+report.within_solver.body_potential_relative_l2 = potential_relative_l2;
 report.within_solver.classic_voltage_balance_max_abs = ...
     max(abs(sum(classic_voltage, 1)));
 report.within_solver.robin_voltage_balance_max_abs = ...
     max(abs(sum(robin_voltage, 1)));
-report.within_solver.classic_seconds = classic_seconds;
-report.within_solver.robin_seconds = robin_seconds;
-report.robin_diagnostics.rank = rank(full(reduced_map));
-report.robin_diagnostics.condition_number = cond(full(reduced_map));
-report.robin_diagnostics.response_relative_residual = response_relative_residual;
-report.implementation_note = [
-    'Robin form is the exact Schur complement of the EIDORS classic CEM ', ...
-    'matrix; reciprocal products use non-conjugate transpose.' ...
+report.within_solver.official_fwd_solve_vs_block_classic_relative_l2 = ...
+    official_classic_relative_l2;
+report.implementation_note = [ ...
+    'EIDORS directly imports the canonical node/element/electrode arrays. ', ...
+    'Official fwd_solve is validation-only; timing uses independent classic ', ...
+    'and Robin factor states on identical preassembled A_R/C/D blocks.' ...
 ];
 
 fid = fopen(fullfile(out_dir, 'eidors_report.json'), 'w');
@@ -167,3 +188,190 @@ cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
 fwrite(fid, jsonencode(report, 'PrettyPrint', true), 'char');
 fprintf('\nEIDORS classic/Robin relative L2: %.6e\n', voltage_relative_l2);
 fprintf('EIDORS CEM benchmark artifacts: %s\n', out_dir);
+
+
+function [timing, classic_potential, classic_voltage, robin_potential, robin_voltage] = ...
+    benchmark_preassembled_blocks(A_R, C, D, currents, repeats)
+classic_cold = zeros(repeats, 1);
+robin_cold = zeros(repeats, 1);
+% Prime MATLAB dispatch/allocator paths, then discard both fresh states.
+cold_classic(A_R, C, D, currents);
+cold_robin(A_R, C, D, currents);
+for repetition = 1:repeats
+    if mod(repetition, 2) == 1
+        started = tic;
+        [classic_potential, classic_voltage] = cold_classic(A_R, C, D, currents);
+        classic_cold(repetition) = toc(started);
+        started = tic;
+        [robin_potential, robin_voltage] = cold_robin(A_R, C, D, currents);
+        robin_cold(repetition) = toc(started);
+    else
+        started = tic;
+        [robin_potential, robin_voltage] = cold_robin(A_R, C, D, currents);
+        robin_cold(repetition) = toc(started);
+        started = tic;
+        [classic_potential, classic_voltage] = cold_classic(A_R, C, D, currents);
+        classic_cold(repetition) = toc(started);
+    end
+end
+
+started = tic;
+classic_state = build_classic_state(A_R, C, D);
+classic_population = toc(started);
+started = tic;
+robin_state = build_robin_state(A_R, C, D);
+robin_population = toc(started);
+classic_warm = zeros(repeats, 1);
+robin_warm = zeros(repeats, 1);
+for repetition = 1:repeats
+    if mod(repetition, 2) == 1
+        started = tic;
+        [robin_potential, robin_voltage] = solve_robin(robin_state, currents);
+        robin_warm(repetition) = toc(started);
+        started = tic;
+        [classic_potential, classic_voltage] = solve_classic(classic_state, currents);
+        classic_warm(repetition) = toc(started);
+    else
+        started = tic;
+        [classic_potential, classic_voltage] = solve_classic(classic_state, currents);
+        classic_warm(repetition) = toc(started);
+        started = tic;
+        [robin_potential, robin_voltage] = solve_robin(robin_state, currents);
+        robin_warm(repetition) = toc(started);
+    end
+end
+
+timing.schema = 'cem-fair-timing-v1';
+timing.scope = 'preassembled_A_R_C_D_blocks';
+timing.repeats = repeats;
+timing.rhs_count = size(currents, 2);
+timing.alternating_order = true;
+timing.untimed_runtime_priming = true;
+timing.cross_formulation_cache_reuse = false;
+timing.classic.cold_seconds = summarize_samples(classic_cold);
+timing.classic.warm_population_seconds = classic_population;
+timing.classic.warm_seconds = summarize_samples(classic_warm);
+timing.classic.cold_sparse_factorizations = repeats;
+timing.classic.cold_dense_factorizations = 0;
+timing.classic.warm_sparse_factorizations = 1;
+timing.classic.warm_dense_factorizations = 0;
+timing.classic.warm_cache_hits = repeats;
+timing.classic.rhs_solves_per_sample = size(currents, 2);
+timing.robin_transconductance.cold_seconds = summarize_samples(robin_cold);
+timing.robin_transconductance.warm_population_seconds = robin_population;
+timing.robin_transconductance.warm_seconds = summarize_samples(robin_warm);
+timing.robin_transconductance.cold_sparse_factorizations = repeats;
+timing.robin_transconductance.cold_dense_factorizations = repeats;
+timing.robin_transconductance.warm_sparse_factorizations = 1;
+timing.robin_transconductance.warm_dense_factorizations = 1;
+timing.robin_transconductance.warm_cache_hits = repeats;
+timing.robin_transconductance.rhs_solves_per_sample = size(currents, 2);
+timing.robin_transconductance.response_basis_rhs_count = size(D, 1) - 1;
+end
+
+
+function state = build_classic_state(A_R, C, D)
+n_nodes = size(A_R, 1);
+L = size(D, 1);
+constraint = sparse(ones(L, 1));
+matrix = [A_R, C, sparse(n_nodes, 1); ...
+    C.', D, constraint; sparse(1, n_nodes), constraint.', sparse(1, 1)];
+state.factor = decomposition(matrix, 'lu');
+state.n_nodes = n_nodes;
+state.n_electrodes = L;
+end
+
+
+function [potential, voltage] = solve_classic(state, currents)
+rhs = zeros(state.n_nodes + state.n_electrodes + 1, size(currents, 2));
+rhs((state.n_nodes + 1):(state.n_nodes + state.n_electrodes), :) = currents;
+solution = state.factor \ rhs;
+potential = solution(1:state.n_nodes, :);
+voltage = solution((state.n_nodes + 1):(state.n_nodes + state.n_electrodes), :);
+end
+
+
+function [potential, voltage] = cold_classic(A_R, C, D, currents)
+state = build_classic_state(A_R, C, D);
+[potential, voltage] = solve_classic(state, currents);
+end
+
+
+function state = build_robin_state(A_R, C, D)
+L = size(D, 1);
+Q = helmert_basis(L);
+state.body_factor = decomposition(A_R, 'lu');
+state.response_basis = state.body_factor \ (C * Q);
+reduced_map = Q.' * (D * Q - C.' * state.response_basis);
+state.reduced_factor = decomposition(full(reduced_map), 'lu');
+state.electrode_basis = Q;
+end
+
+
+function [potential, voltage] = solve_robin(state, currents)
+coefficients = state.reduced_factor \ (state.electrode_basis.' * currents);
+potential = -(state.response_basis * coefficients);
+voltage = state.electrode_basis * coefficients;
+end
+
+
+function [potential, voltage] = cold_robin(A_R, C, D, currents)
+state = build_robin_state(A_R, C, D);
+[potential, voltage] = solve_robin(state, currents);
+end
+
+
+function Q = helmert_basis(L)
+Q = zeros(L, L - 1);
+for column = 1:(L - 1)
+    scale = sqrt(column * (column + 1));
+    Q(1:column, column) = 1 / scale;
+    Q(column + 1, column) = -column / scale;
+end
+end
+
+
+function summary = summarize_samples(samples)
+raw_values = double(samples(:));
+values = sort(raw_values);
+summary.samples = raw_values.';
+summary.median = median(values);
+summary.iqr = percentile_linear(values, 0.75) - percentile_linear(values, 0.25);
+summary.minimum = min(values);
+summary.maximum = max(values);
+end
+
+
+function value = percentile_linear(sorted_values, fraction)
+position = 1 + (numel(sorted_values) - 1) * fraction;
+lower = floor(position);
+upper = ceil(position);
+if lower == upper
+    value = sorted_values(lower);
+else
+    weight = position - lower;
+    value = sorted_values(lower) * (1 - weight) + sorted_values(upper) * weight;
+end
+end
+
+
+function value = relative_l2(candidate, reference)
+value = norm(candidate - reference, 'fro') / max(norm(reference, 'fro'), eps);
+end
+
+
+function gnd_node = choose_ground_node(nodes, electrode_nodes, electrode_counts)
+mask = false(size(nodes, 1), 1);
+for index = 1:numel(electrode_counts)
+    active = electrode_nodes(index, 1:electrode_counts(index));
+    active = active(active > 0);
+    mask(active) = true;
+end
+free_nodes = find(~mask);
+if isempty(free_nodes)
+    gnd_node = 1;
+    return;
+end
+[~, nearest] = min(sum(nodes(free_nodes, :).^2, 2));
+gnd_node = free_nodes(nearest);
+end

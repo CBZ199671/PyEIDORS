@@ -1,35 +1,45 @@
-# Robin 边界 CEM：数学原理、PyEIDORS 移植与跨 FEM 对比
+# Robin 边界 CEM：数学原理、PyEIDORS 移植与公平跨 FEM 对比
 
 ## 结论
 
 Deakin、Adler 和 Lionheart 在 EIT 2026 论文《Complete electrode model via
 Robin boundary conditions》中给出的算法，不是另一套电极物理模型，而是经典完整电极
-模型（CEM）离散矩阵的精确 Schur 补形式。相同网格、函数空间、积分规则、材料参数和
-线性代数精度下，两者应只相差舍入误差。
+模型（CEM）离散矩阵的精确 Schur 补形式。相同网格、函数空间、积分规则、物理参数、
+规范条件和标量精度下，两者应只相差舍入误差。
 
-本项目的实测结果与此完全一致：
+修正后的基准由 PyEIDORS 生成一次公共网格，再由 NGSolve 和 EIDORS 直接导入。三端均为
+652 节点、1190 个 P1 三角形、112 条带电极编号的边界边、实数 `float64`；公共 SHA-256
+网格指纹为：
 
-| 求解器 / 离散 | 标量精度 | 电极电压相对 L2（Robin 对经典） | 特征电阻曲线相对 L2 |
+```text
+3ea76a1e81332ce6bbc49d4f170dbb55a07b2211c6cc74d5666a143bd9643088
+```
+
+严格同网格结果如下：
+
+| 求解器 | 电极电压相对 L2（Robin 对经典） | 体内电势相对 L2 | 特征电阻曲线相对 L2 |
 |---|---:|---:|---:|
-| PyEIDORS / DOLFINx P1 | complex64 | 7.135e-7 | 3.096e-7 |
-| NGSolve H1 P2 | float64 | 6.110e-15 | 2.627e-15 |
-| EIDORS P1 | float64 | 5.189e-15 | 5.203e-16 |
+| PyEIDORS / DOLFINx P1 float64 | 2.155e-15 | 2.432e-15 | 7.536e-16 |
+| NGSolve P1 float64 | 2.255e-15 | 2.712e-15 | 2.644e-16 |
+| EIDORS P1 float64 | 1.192e-15 | 1.407e-15 | 6.808e-16 |
 
-三套求解器之间的原始 SI 特征电阻曲线则存在明显更大的离散差异：
+跨求解器的经典 CEM 特征电阻曲线差异也降到了舍入误差量级：EIDORS 对 PyEIDORS 为
+`1.800e-15`，NGSolve 对 PyEIDORS 为 `2.796e-14`，EIDORS 对 NGSolve 为
+`2.951e-14`。Robin 结果分别为 `1.102e-15`、`2.845e-14`、`2.930e-14`。
+这说明三套 FEM 在公共 P1 网格上的 CEM 离散实际上等价；此前约 `0.565%–1.727%` 的
+跨求解器差异主要来自各自生成的不同网格和 NGSolve P2/PyEIDORS P1 的阶次差异。
 
-| 求解器对（经典 CEM） | 原始曲线相对 L2 | 最大逐点相对差异 | 相关系数 |
-|---|---:|---:|---:|
-| EIDORS 对 NGSolve | 0.565% | 1.130% | 0.9999999984 |
-| EIDORS 对 PyEIDORS | 1.155% | 2.452% | 0.9999999279 |
-| NGSolve 对 PyEIDORS | 1.727% | 3.623% | 0.9999999057 |
-
-Robin 公式下得到几乎相同的跨求解器数值。这说明当前可见差异主要来自网格密度、P1/P2
-阶次、边界几何近似、积分实现以及 complex64/float64 精度，而不是 CEM 公式改变了物理。
+此前 PyEIDORS 的 `7.135e-7` 结果无效于本次公平精度比较。`complex64` 的实部和虚部各是
+`float32`，机器精度约 `1.19e-7`；即使输入物理量全为实数，其稀疏因子分解仍按单精度
+复数进行。因此 `7.135e-7` 正是合理的单精度舍入量级，不是 Robin 数学算法错误。
+本实验是实电导率问题，PyEIDORS 没有数学理由必须使用复数，故改用 real `float64` 的
+Nix profile。若以后比较复导纳，三端应统一为 `complex128`，不能拿 `complex64` 与
+`float64/complex128` 混比。
 
 ## 根本数学原理
 
 设体内节点电势为 `u`，`L` 个电极电压为 `U`，施加的净电极电流为 `I`，接触阻抗
-边界项已经组装进 `A_R = K + B`。经典 CEM 的离散增广系统可写为
+边界项已经组装进 `A_R = K + B`。经典 CEM 的离散增广系统为
 
 ```text
 [ A_R   C    0 ] [u]   [0]
@@ -50,8 +60,8 @@ u = -A_R^{-1} C U.
 T = D - C^T A_R^{-1} C,       I = T U.
 ```
 
-`T` 在常数电压方向上奇异，这正是电势规范自由度，而不是数值故障。令 `Q` 为
-`1^T U = 0` 子空间的一组确定性正交基（本实现使用 Helmert 基），写成 `U = Qy`，则
+`T` 在常数电压方向上奇异，这是电势规范自由度。令 `Q` 为 `1^T U = 0` 子空间的
+确定性正交 Helmert 基，写成 `U = Qy`，则
 
 ```text
 T_r = Q^T T Q,
@@ -60,17 +70,16 @@ U = Qy,
 u = -A_R^{-1} C Qy.
 ```
 
-算法只求解满秩的 `(L-1) × (L-1)` 矩阵 `T_r`，绝不对奇异的完整 `T` 求逆，也
-不使用伪逆掩盖电极丢失、秩亏或病态问题。
+算法只求解满秩的 `(L-1) × (L-1)` 矩阵 `T_r`，不对奇异的完整 `T` 求逆，也不使用
+伪逆掩盖电极丢失、秩亏或病态问题。
 
-对复电导率，互易 FEM 系统是复对称矩阵而不一定是 Hermitian 矩阵，因此上述乘积必须
-使用非共轭转置 `T`（NumPy 的 `.T`、MATLAB 的 `.'`），不能替换为共轭转置。这一点与
-EIDORS `system_mat_1st_order` 的源码注释和实现一致。
+对复电导率，互易 FEM 系统是复对称矩阵而不一定是 Hermitian 矩阵，所以上述乘积必须
+使用非共轭转置（NumPy 的 `.T`、MATLAB 的 `.'`），不能替换为共轭转置。
 
 ## PyEIDORS 移植
 
-实现位于 `src/pyeidors/forward/robin_transconductance.py`，公开类为
-`RobinTransconductanceForwardModel`。`EITSystem` 新增选择器：
+生产实现位于 `src/pyeidors/forward/robin_transconductance.py`，公开类为
+`RobinTransconductanceForwardModel`。`EITSystem` 的选择方式为：
 
 ```python
 system = EITSystem(
@@ -79,11 +88,10 @@ system = EITSystem(
 )
 ```
 
-不传该参数时仍使用 `cem_formulation="classic"`，原有行为不变。实现复用了 PyEIDORS
-既有电极矩阵的 `B/C/D` 分块，从而保证经典与 Robin 路径具有完全一致的符号约定、
-电极标签、接触阻抗单位和积分形式。
+不传该参数时仍使用 `cem_formulation="classic"`。实现复用既有电极矩阵的 `B/C/D`
+分块，保证两条路径的电极标签、符号约定、接触阻抗单位和积分形式相同。
 
-每个电导率状态执行以下操作：
+每个电导率状态执行：
 
 1. 组装一次 `A_R`，建立一次稀疏求解器；
 2. 一次性求解全部 `L-1` 个 `CQ` Robin 基响应；
@@ -91,67 +99,90 @@ system = EITSystem(
 4. 对任意批量平衡电流只求解小型 `T_r`，再恢复 `U` 和 `u`；
 5. 按电导率指纹、后端和标量类型隔离缓存。
 
-不平衡电流、非有限值、秩亏或超过精度相关阈值的病态转导矩阵会给出明确错误；不会
-静默使用伪逆。PETSc 路径会记录真实残差、KSP 设置次数、基 RHS 次数及回退原因。
+本次公平基准中的块矩阵算法还分别与 PyEIDORS 两个生产入口核对：经典入口差异为 `0`，
+Robin 入口差异为 `7.545e-16`。EIDORS 公平经典块解与官方 `fwd_solve` 的差异为
+`2.693e-15`。
 
-## 对比实验设计
+## 公平网格与计时设计
 
-共同物理参数沿用作者源码的圆盘设置：半径 `4 m`、背景电导率 `0.25 S/m`、接触阻抗
-`1`、电极覆盖率 `0.7`。为控制三套运行时成本，本次使用 16 个电极，并施加
-`k = 1...8` 的余弦/正弦空间电流模式。比较量为论文使用的特征电阻
-`||U||₂ / ||I||₂`，保留原始 SI 值，不进行作者 notebook 中用于展示的事后拟合缩放。
+共同物理参数为：半径 `4 m`、背景电导率 `0.25 S/m`、接触阻抗 `1`、16 个电极、
+电极覆盖率 `0.7`，以及 `k=1...8` 的余弦/正弦平衡电流。比较量为原始 SI 特征电阻
+`||U||₂ / ||I||₂`，不做拟合缩放。
 
-离散信息如下：
+PyEIDORS 输出两种完全同源的网格载体：
 
-| 求解器 | 网格 | 电势空间 | 电极积分 | 线性求解 |
-|---|---|---|---|---|
-| PyEIDORS | 652 点 / 1190 三角形 | DOLFINx P1 | facet forms | complex64 SciPy SuperLU |
-| NGSolve | 2514 点 / 4611 单元，9638 DOF | H1 P2 | SymbolicBFI/LFI | NGSolve 组装，float64 SuperLU |
-| EIDORS | 6393 点 / 12528 三角形 | P1 | system_mat_fields CEM | 官方经典解 + MATLAB Schur 解 |
+- ASCII Gmsh 2.2：NGSolve 导入后重新提取节点、单元和带电极标签的边并重算指纹；
+- MATLAB MAT：EIDORS 直接赋值 `nodes/elems/boundary/electrode.nodes` 并核对数量与内容。
 
-NGSolve 阶次保留作者 notebook 的 P2；PyEIDORS 与 EIDORS 使用各自常规 P1。因此
-“同一求解器内”结果用于检验公式等价性，“跨求解器”结果只用于量化实际 FEM 离散差异，
-两类数字不能混为一谈。
+聚合器只有在三端同时满足 P1、`float64`、同一 64 位十六进制指纹、导入已验证、计时
+作用域相同且无跨公式缓存复用时才接受结果。
 
-单次计时仅作诊断，不作性能结论：PyEIDORS 经典/Robin 为约 `0.008/0.012 s`，NGSolve
-代数经典/Robin 为约 `0.100/0.220 s`，EIDORS 官方经典/Robin Schur 阶段为约
-`0.434/0.022 s`。三者包含的组装、缓存和求解阶段不同，不能直接据此宣称固定加速比。
+速度比较以每端已经装配好的同一组 `A_R/C/D` 为输入，并把 FEM 组装单列报告：
+
+- 冷启动：每次创建全新的公式状态，包含矩阵构造、稀疏/稠密因子分解和全部 16 个 RHS；
+- 热求解：每个公式先独立填充一次自己的缓存，样本只包含相同 16 RHS 的求解与恢复；
+- 计时前各做一次不保留因子的运行时预热，仅排除语言分派和分配器的一次性开销；
+- 两个公式均重复 11 次，测量顺序逐次交替；
+- 经典缓存绝不传给 Robin，Robin 缓存也绝不传给经典；
+- 报告中保存全部样本、median、IQR、因子分解次数和缓存命中次数。
+
+公平计时中位数如下（单位：秒/全部 16 RHS）：
+
+| 求解器 | 经典冷启动 | Robin 冷启动 | 经典/Robin | 经典热求解 | Robin 热求解 | 经典/Robin |
+|---|---:|---:|---:|---:|---:|---:|
+| PyEIDORS | 0.002825 | 0.002049 | 1.379× | 0.000286 | 0.0000400 | 7.140× |
+| NGSolve | 0.003000 | 0.002020 | 1.485× | 0.000367 | 0.0000478 | 7.692× |
+| EIDORS | 0.001962 | 0.002378 | 0.825× | 0.000259 | 0.000113 | 2.302× |
+
+`经典/Robin > 1` 表示 Robin 更快。EIDORS 的 Robin 冷启动因额外构造响应基和小型稠密
+LU，约慢 21.2%；但缓存建立后，Robin 热求解约快 2.30 倍。PyEIDORS 和 NGSolve 在
+冷、热两阶段的 Robin 都更快。这里比较的是相同块输入上的线性代数求解阶段，不应把
+不同语言的 JIT、模型构造或网格生成时间混入公式加速比。
+
+此前报告的 EIDORS `0.434/0.022 s`、PyEIDORS `0.008/0.012 s` 和 NGSolve
+`0.100/0.220 s` 不再用于性能结论：它们混合了官方 `fwd_solve`、不同组装范围、不同
+网格，以及第二次调用可能命中第一次产生的状态，计时口径不对称。
 
 ## 复现
 
-PyEIDORS（项目固定的 pure-Nix complex64 CUDA 开发环境）：
+先在 real float64 Nix profile 中生成公共网格并运行 PyEIDORS：
 
 ```bash
-nix develop .#complex64-cuda --command \
+nix develop .#default --command \
   python scripts/benchmarks/compare_cem_formulations.py \
-  --output-dir output/cem_formulation_comparison
+  --output-dir output/cem_formulation_comparison \
+  --timing-repeats 11
 ```
 
-NGSolve 脚本是作者 notebook 的无界面版本，需要独立 NGSolve Python 运行时；它不属于
-PyEIDORS 的 runtime 依赖：
+NGSolve 使用独立 Python 运行时，但必须导入上一步的公共 MSH：
 
 ```bash
 python scripts/benchmarks/ngsolve_cem_formulations.py \
-  --output-dir output/cem_formulation_comparison
+  --output-dir output/cem_formulation_comparison \
+  --mesh output/cem_formulation_comparison/common_mesh/cem_common_p1.msh \
+  --mesh-metadata output/cem_formulation_comparison/common_mesh/cem_common_p1.json \
+  --timing-repeats 11
 ```
 
-EIDORS 在 MATLAB 中运行：
+EIDORS 从环境变量指定的公共 MAT 运行：
 
 ```matlab
-run('compare_with_Eidors/compare_cem_formulations.m')
+setenv('CEM_BENCHMARK_OUTPUT_DIR', '<output/cem_formulation_comparison>');
+setenv('CEM_COMMON_MESH_MAT', '<output/cem_formulation_comparison/common_mesh/cem_common_p1.mat>');
+setenv('CEM_TIMING_REPEATS', '11');
+run('compare_with_Eidors/compare_cem_formulations.m');
 ```
 
-最后用 `compare_cem_formulations.py --skip-pyeidors` 加载三个 CSV/JSON，可重新生成合并
-CSV、机器可读报告和 Times New Roman 数字/英文图。实际命令及全部输入路径记录在聚合
-JSON 中。
+最后以 `--skip-pyeidors` 同时加载三个 CSV/JSON，聚合器会先执行严格公平性校验，再生成
+合并报告和图。
 
 ## 产物
 
-- `output/cem_formulation_comparison/cem_formulation_comparison.csv`：三套求解器的原始数据；
-- `output/cem_formulation_comparison/cem_formulation_comparison.json`：参数、离散元数据和两类误差；
-- `output/cem_formulation_comparison/cem_formulation_comparison.png`：无事后缩放的对比图；
-- `pyeidors_report.json`、`ngsolve_report.json`、`eidors_report.json`：各求解器独立诊断；
-- `eidors_raw_voltages.mat`：EIDORS 可复核的原始电压矩阵。
+- `common_mesh/cem_common_p1.msh|mat|json`：公共网格与指纹；
+- `cem_formulation_comparison.csv|json|png`：三端数值对比；
+- `cem_formulation_timing.csv|png`：冷/热阶段的公平计时；
+- `pyeidors_report.json`、`ngsolve_report.json`、`eidors_report.json`：完整样本与诊断；
+- `eidors_raw_voltages.mat`：EIDORS 原始电势和电极电压。
 
 作者提供的 `CEM-via-Robin-Boundary` 目录保持原样，未纳入或修改其源码；移植实现和对照
 脚本均为项目内独立文件。
