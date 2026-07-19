@@ -15,7 +15,9 @@ from scipy.sparse.linalg import splu
 
 
 MESH_FINGERPRINT_SCHEMA = "cem-p1-mesh-sha256-v2"
+TIMING_SCHEMA = "cem-fair-timing-v2"
 TIMING_SCOPE = "preassembled_A_R_C_D_blocks"
+DEFAULT_OPERATIONS_PER_SAMPLE = 16
 
 
 def zero_sum_helmert_basis(count: int) -> np.ndarray:
@@ -249,11 +251,14 @@ def benchmark_preassembled_blocks(
     currents: np.ndarray,
     *,
     repeats: int = 11,
+    operations_per_sample: int = DEFAULT_OPERATIONS_PER_SAMPLE,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray], dict[str, float]]:
-    """Benchmark independent classic/Robin cold and warm algebraic states."""
+    """Benchmark paired cold/setup components and retained-state reuse."""
 
     if repeats < 3:
         raise ValueError("fair timing requires at least three repetitions")
+    if operations_per_sample < 1:
+        raise ValueError("operations_per_sample must be positive")
     a_r = _as_csc(robin_matrix)
     c = _as_csc(coupling)
     d = _as_csc(electrode_matrix)
@@ -261,25 +266,42 @@ def benchmark_preassembled_blocks(
     if current_matrix.ndim != 2 or current_matrix.shape[0] != d.shape[0]:
         raise ValueError("currents must have shape (n_electrodes, n_rhs)")
 
-    cold_samples = {"classic": [], "robin_transconductance": []}
+    formulations = ("classic", "robin_transconductance")
+    cold_samples = {name: [] for name in formulations}
+    setup_samples = {name: [] for name in formulations}
+    cold_solve_samples = {name: [] for name in formulations}
     last_results: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-    def cold_classic():
+    def cold_classic_components():
+        total_started = time.perf_counter()
+        setup_started = time.perf_counter()
         state = _classic_state(a_r, c, d)
-        return _solve_classic(state, current_matrix)
+        setup_elapsed = time.perf_counter() - setup_started
+        solve_started = time.perf_counter()
+        result = _solve_classic(state, current_matrix)
+        solve_elapsed = time.perf_counter() - solve_started
+        total_elapsed = time.perf_counter() - total_started
+        return total_elapsed, setup_elapsed, solve_elapsed, result
 
-    def cold_robin():
+    def cold_robin_components():
+        total_started = time.perf_counter()
+        setup_started = time.perf_counter()
         state = _robin_state(a_r, c, d)
-        return _solve_robin(state, current_matrix)
+        setup_elapsed = time.perf_counter() - setup_started
+        solve_started = time.perf_counter()
+        result = _solve_robin(state, current_matrix)
+        solve_elapsed = time.perf_counter() - solve_started
+        total_elapsed = time.perf_counter() - total_started
+        return total_elapsed, setup_elapsed, solve_elapsed, result
 
     cold_calls = {
-        "classic": cold_classic,
-        "robin_transconductance": cold_robin,
+        "classic": cold_classic_components,
+        "robin_transconductance": cold_robin_components,
     }
     # Prime Python/SciPy dispatch and allocator paths without retaining either
     # factor state. Timed cold samples still rebuild every formulation state.
-    cold_classic()
-    cold_robin()
+    cold_classic_components()
+    cold_robin_components()
     for repetition in range(repeats):
         order = (
             ("classic", "robin_transconductance")
@@ -287,17 +309,28 @@ def benchmark_preassembled_blocks(
             else ("robin_transconductance", "classic")
         )
         for name in order:
-            elapsed, result = _elapsed(cold_calls[name])
-            cold_samples[name].append(elapsed)
-            last_results[name] = result
+            batch_totals = []
+            batch_setups = []
+            batch_solves = []
+            for _ in range(operations_per_sample):
+                total, setup, cold_solve, result = cold_calls[name]()
+                if total < setup or total < cold_solve:
+                    raise RuntimeError("paired cold timing components exceed total")
+                batch_totals.append(total)
+                batch_setups.append(setup)
+                batch_solves.append(cold_solve)
+                last_results[name] = result
+            cold_samples[name].append(float(np.mean(batch_totals)))
+            setup_samples[name].append(float(np.mean(batch_setups)))
+            cold_solve_samples[name].append(float(np.mean(batch_solves)))
 
-    classic_population, classic_state = _elapsed(lambda: _classic_state(a_r, c, d))
-    robin_population, robin_state = _elapsed(lambda: _robin_state(a_r, c, d))
+    classic_state = _classic_state(a_r, c, d)
+    robin_state = _robin_state(a_r, c, d)
     warm_calls = {
         "classic": lambda: _solve_classic(classic_state, current_matrix),
         "robin_transconductance": lambda: _solve_robin(robin_state, current_matrix),
     }
-    warm_samples = {"classic": [], "robin_transconductance": []}
+    warm_samples = {name: [] for name in formulations}
     for repetition in range(repeats):
         order = (
             ("robin_transconductance", "classic")
@@ -305,9 +338,12 @@ def benchmark_preassembled_blocks(
             else ("classic", "robin_transconductance")
         )
         for name in order:
-            elapsed, result = _elapsed(warm_calls[name])
-            warm_samples[name].append(elapsed)
-            last_results[name] = result
+            batch = []
+            for _ in range(operations_per_sample):
+                elapsed, result = _elapsed(warm_calls[name])
+                batch.append(elapsed)
+                last_results[name] = result
+            warm_samples[name].append(float(np.mean(batch)))
 
     classic_potential, classic_voltage = last_results["classic"]
     robin_potential, robin_voltage = last_results["robin_transconductance"]
@@ -321,34 +357,50 @@ def benchmark_preassembled_blocks(
             np.linalg.norm(robin_voltage - classic_voltage) / denominator_v
         ),
     }
+    classic_cold_summary = timing_summary(cold_samples["classic"])
+    classic_warm_summary = timing_summary(warm_samples["classic"])
+    robin_cold_summary = timing_summary(cold_samples["robin_transconductance"])
+    robin_warm_summary = timing_summary(warm_samples["robin_transconductance"])
     timing = {
-        "schema": "cem-fair-timing-v1",
+        "schema": TIMING_SCHEMA,
         "scope": TIMING_SCOPE,
         "repeats": int(repeats),
+        "operations_per_sample": int(operations_per_sample),
         "rhs_count": int(current_matrix.shape[1]),
         "alternating_order": True,
         "untimed_runtime_priming": True,
         "cross_formulation_cache_reuse": False,
+        "paired_cold_decomposition": True,
         "classic": {
-            "cold_seconds": timing_summary(cold_samples["classic"]),
-            "warm_population_seconds": classic_population,
-            "warm_seconds": timing_summary(warm_samples["classic"]),
-            "cold_sparse_factorizations": int(repeats),
+            "cold_seconds": classic_cold_summary,
+            "setup_seconds": timing_summary(setup_samples["classic"]),
+            "cold_solve_seconds": timing_summary(cold_solve_samples["classic"]),
+            "warm_reuse_seconds": classic_warm_summary,
+            "cold_over_warm_reuse_speedup": float(
+                classic_cold_summary["median"] / classic_warm_summary["median"]
+            ),
+            "cold_sparse_factorizations": int(repeats * operations_per_sample),
             "cold_dense_factorizations": 0,
             "warm_sparse_factorizations": 1,
             "warm_dense_factorizations": 0,
-            "warm_cache_hits": int(repeats),
+            "warm_cache_hits": int(repeats * operations_per_sample),
             "rhs_solves_per_sample": int(current_matrix.shape[1]),
         },
         "robin_transconductance": {
-            "cold_seconds": timing_summary(cold_samples["robin_transconductance"]),
-            "warm_population_seconds": robin_population,
-            "warm_seconds": timing_summary(warm_samples["robin_transconductance"]),
-            "cold_sparse_factorizations": int(repeats),
-            "cold_dense_factorizations": int(repeats),
+            "cold_seconds": robin_cold_summary,
+            "setup_seconds": timing_summary(setup_samples["robin_transconductance"]),
+            "cold_solve_seconds": timing_summary(
+                cold_solve_samples["robin_transconductance"]
+            ),
+            "warm_reuse_seconds": robin_warm_summary,
+            "cold_over_warm_reuse_speedup": float(
+                robin_cold_summary["median"] / robin_warm_summary["median"]
+            ),
+            "cold_sparse_factorizations": int(repeats * operations_per_sample),
+            "cold_dense_factorizations": int(repeats * operations_per_sample),
             "warm_sparse_factorizations": 1,
             "warm_dense_factorizations": 1,
-            "warm_cache_hits": int(repeats),
+            "warm_cache_hits": int(repeats * operations_per_sample),
             "rhs_solves_per_sample": int(current_matrix.shape[1]),
             "response_basis_rhs_count": int(d.shape[0] - 1),
         },
@@ -380,10 +432,22 @@ def validate_solver_reports(reports: list[dict[str, Any]]) -> str:
         if not bool(discretization.get("mesh_import_verified", False)):
             raise ValueError(f"{solver} did not verify the imported common mesh")
         timing = report.get("timing", {})
+        if timing.get("schema") != TIMING_SCHEMA:
+            raise ValueError(f"{solver} timing schema must be {TIMING_SCHEMA}")
         if timing.get("scope") != TIMING_SCOPE:
             raise ValueError(f"{solver} timing scope is not fair preassembled blocks")
+        if int(timing.get("operations_per_sample", 0)) < 1:
+            raise ValueError(f"{solver} timing operation batch is invalid")
+        if not bool(timing.get("paired_cold_decomposition", False)):
+            raise ValueError(f"{solver} timing cold decomposition is not paired")
         if bool(timing.get("cross_formulation_cache_reuse", True)):
             raise ValueError(f"{solver} reused cache artifacts across formulations")
+        for formulation in ("classic", "robin_transconductance"):
+            phase = timing.get(formulation, {})
+            cold = float(phase.get("cold_seconds", {}).get("median", np.nan))
+            warm = float(phase.get("warm_reuse_seconds", {}).get("median", np.nan))
+            if not (np.isfinite(cold) and np.isfinite(warm) and cold > warm > 0.0):
+                raise ValueError(f"{solver} {formulation} cold/warm timing is invalid")
         fingerprints.add(fingerprint)
     if len(fingerprints) != 1:
         raise ValueError(f"solver mesh fingerprints differ: {sorted(fingerprints)}")

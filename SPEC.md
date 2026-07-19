@@ -824,6 +824,7 @@ CLI additions still pending unless named above:
 | V706 | Professor-facing CEM exact-accuracy report ! technical summary→visual findings→scope/metric definitions→exact arithmetic proof→experiment design→robustness/limits→next steps; every quantitative claim traceable to suite CSV/JSON; charts Times New Roman & final report render validated | docs/benchmarks/cem_exact_accuracy_report.md; CEM exact-accuracy MCP report |
 | V707 | Exact-suite connectivity index contract ! in-memory nodes/cells/edges/electrode nodes all 0-based; MAT `elems/boundary_edges/electrode_nodes` all 1-based; saved MAT electrode rows equal tagged electrode boundary rows and DOLFINx import recovers exactly one positive-measure facet per electrode; mixed-base serialization ⊥ | scripts/benchmarks/cem_exact_reference_suite.py; tests/unit/test_cem_exact_reference_suite.py |
 | V708 | Exact-suite artifact JSON ! all JSON report values RFC-compatible finite scalar/string/bool/null; optional unavailable assembly/import timing → `null`, ⊥ `NaN/Infinity`; certification payload must serialize with `allow_nan=False` and parse in strict JS/MCP | scripts/benchmarks/cem_exact_reference_suite.py; tests/unit/test_cem_exact_reference_suite.py |
+| V709 | CEM timing interpretation ! cold=`state build + first 16-RHS solve`; state population named setup, ⊥ warm; warm reuse=`own retained state + repeated 16-RHS solve`; cold/setup components paired & ≥11 repeated samples, ⊥ singleton setup timing; each record ! absolute median/IQR + normalized cold/warm speedup + explicit `Robin/Classic` same-phase ratio; report ⊥ compare phase ratios as absolute speed; valid run ! `cold_median > warm_reuse_median` per solver/formulation/case | scripts/benchmarks/cem_fair_common.py; scripts/benchmarks/cem_exact_reference_suite.py; compare_with_Eidors/compare_cem_formulations.m; tests/unit/test_compare_cem_formulations.py; tests/unit/test_cem_exact_reference_suite.py; docs/benchmarks/cem_exact_accuracy_report.md |
 
 ## §T — tasks
 
@@ -1480,6 +1481,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T588 | x | Backprop strict same-mesh/float64 CEM parity + fair cold/warm timing benchmark | V683,V684,V685,V686,V687,V688,V689,V690,V691,V692 |
 | T589 | x | Add independent 80/128-dps CEM truth + absolute PyEIDORS/NGSolve/EIDORS accuracy ranking | V67,V683,V687,V693,V694,V695,V696,V697,V698,V699,V700 |
 | T590 | x | Add rational-circular multi-case exact CEM truth + cross-FEM robustness report | V683,V686,V687,V689,V691,V692,V697,V698,V699,V700,V701,V702,V703,V704,V705,V706 |
+| T591 | x | Backprop unambiguous paired CEM cold/setup/warm timing + absolute speedup report | V688,V691,V697,V706,V708,V709 |
 
 ## §B — bugs
 
@@ -2082,3 +2084,5 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B595 | 2026-07-19 | exact-suite 2×2 静态证据图首次导出把底部说明用绝对 `figure.text(y=.005)` 放置，与下排 x 轴标签重叠；V706 渲染检查足够，改用 constrained-layout 管理的 `supxlabel` 后复查 | V706,T590 |
 | B596 | 2026-07-19 | MCP report 读取最终认证 JSON 时在 validator 调用前被严格 `JSON.parse` 拒绝；聚合器将 PyEIDORS 未提供的 assembly/import timing 写成 Python 非标准 `NaN`，改为 JSON `null` 并加 strict-serialization gate | V708,T590 |
 | B597 | 2026-07-20 | T590 全量 `complex64-cuda` pytest 首次运行被外层 120 s 命令预算终止，PETSc/MPI 随后因 stdout 管道关闭报告 `Broken Pipe`；这不是测试断言失败，无需新增产品不变量，改用足够的验证时限原样重跑 | T590 |
+| B598 | 2026-07-20 | T590 报告只突出 `Robin/Classic` 同阶段比值且把单次 state population 标成“热态建态” → 读者把跨阶段比值误读为 PyEIDORS 冷态快于热态；原始绝对值实际显示 warm reuse 快 12–33×；setup 单样本也不足以支持严谨比较 | V709,T591 |
+| B599 | 2026-07-20 | T591 NGSolve 批处理让 PowerShell 抢先展开 Bash `$case_dir`，聚合预检又让 PowerShell 抢先执行 `$()` → runner/聚合均未启动且后者外层假报 exit 0；改用 7 条显式路径 + 无命令替换检查 | V697,T591 |

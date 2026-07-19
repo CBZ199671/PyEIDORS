@@ -208,33 +208,45 @@ def test_v688_timing_aggregation_keeps_phases_and_ratio_direction_explicit() -> 
                     "solver": "solver-a",
                     "formulation": "classic",
                     "cold_median_seconds": 4.0,
-                    "warm_population_seconds": 2.0,
-                    "warm_median_seconds": 1.0,
+                    "setup_median_seconds": 2.0,
+                    "warm_reuse_median_seconds": 1.0,
+                    "cold_over_warm_reuse_speedup": 4.0,
                 },
                 {
                     "case_id": case.case_id,
                     "solver": "solver-a",
                     "formulation": "robin_transconductance",
                     "cold_median_seconds": 2.0,
-                    "warm_population_seconds": 1.0,
-                    "warm_median_seconds": 0.5,
+                    "setup_median_seconds": 1.0,
+                    "warm_reuse_median_seconds": 0.5,
+                    "cold_over_warm_reuse_speedup": 4.0,
                 },
             )
         )
 
     result = aggregate_timing_metrics(records)
     assert len(result["per_case_robin_over_classic_ratios"]) == len(CASES)
-    for phase in ("cold", "warm_population", "warm_reuse"):
+    for phase in ("cold", "setup", "warm_reuse"):
         summary = result["solver_phase_summary"]["solver-a"][phase]
         assert summary["geometric_mean_robin_over_classic_ratio"] == 0.5
         assert summary["robin_faster_case_count"] == len(CASES)
+    absolute = result["solver_formulation_absolute_summary"]["solver-a"]
+    assert absolute["classic"]["geometric_mean_cold_over_warm_reuse_speedup"] == 4.0
+    assert (
+        absolute["robin_transconductance"][
+            "geometric_mean_cold_over_warm_reuse_speedup"
+        ]
+        == 4.0
+    )
 
 
 def test_v708_missing_optional_timing_is_strict_json_null() -> None:
     phase = {
         "cold_seconds": {"median": 1.0, "iqr": 0.1},
-        "warm_population_seconds": 0.5,
-        "warm_seconds": {"median": 0.2, "iqr": 0.02},
+        "setup_seconds": {"median": 0.5, "iqr": 0.05},
+        "cold_solve_seconds": {"median": 0.4, "iqr": 0.04},
+        "warm_reuse_seconds": {"median": 0.2, "iqr": 0.02},
+        "cold_over_warm_reuse_speedup": 5.0,
     }
     report = {
         "solver": "test-solver",
@@ -248,4 +260,6 @@ def test_v708_missing_optional_timing_is_strict_json_null() -> None:
 
     assert records[0]["assembly_seconds"] is None
     assert records[0]["mesh_import_seconds"] is None
+    assert records[0]["setup_median_seconds"] == 0.5
+    assert records[0]["warm_reuse_median_seconds"] == 0.2
     json.dumps(records, allow_nan=False)

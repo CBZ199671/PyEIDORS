@@ -38,7 +38,9 @@ from pyeidors.interop.geometry_exchange import (
 )
 
 from scripts.benchmarks.cem_fair_common import (
+    DEFAULT_OPERATIONS_PER_SAMPLE,
     MESH_FINGERPRINT_SCHEMA,
+    TIMING_SCHEMA,
     benchmark_preassembled_blocks,
     canonical_mesh_fingerprint,
     write_gmsh22,
@@ -56,8 +58,8 @@ from scripts.benchmarks.compare_cem_formulations import (
 SUITE_SCHEMA = "cem-exact-rational-suite-v1"
 GEOMETRY_SCHEMA = "cem-rational-cyclic-32gon-v1"
 METRIC_SCHEMA = "cem-exact-accuracy-metrics-v1"
-TIMING_SCHEMA = "cem-fair-timing-v1"
 TIMING_REPEATS = 11
+TIMING_OPERATIONS_PER_SAMPLE = DEFAULT_OPERATIONS_PER_SAMPLE
 N_ELECTRODES = 16
 BOUNDARY_COUNT = 2 * N_ELECTRODES
 COORDINATE_SCALE = 8192
@@ -81,9 +83,13 @@ TIMING_CSV_FIELDS = (
     "formulation",
     "cold_median_seconds",
     "cold_iqr_seconds",
-    "warm_population_seconds",
-    "warm_median_seconds",
-    "warm_iqr_seconds",
+    "setup_median_seconds",
+    "setup_iqr_seconds",
+    "cold_solve_median_seconds",
+    "cold_solve_iqr_seconds",
+    "warm_reuse_median_seconds",
+    "warm_reuse_iqr_seconds",
+    "cold_over_warm_reuse_speedup",
     "assembly_seconds",
     "mesh_import_seconds",
 )
@@ -766,15 +772,26 @@ def _validate_solver_report(
         raise ValueError(f"{solver} timing scope mismatch")
     if int(timing.get("repeats", -1)) != TIMING_REPEATS:
         raise ValueError(f"{solver} timing repeats mismatch")
+    if int(timing.get("operations_per_sample", -1)) != TIMING_OPERATIONS_PER_SAMPLE:
+        raise ValueError(f"{solver} timing operation batch mismatch")
     if int(timing.get("rhs_count", -1)) != N_ELECTRODES:
         raise ValueError(f"{solver} timing RHS count mismatch")
-    for flag in ("alternating_order", "untimed_runtime_priming"):
+    for flag in (
+        "alternating_order",
+        "untimed_runtime_priming",
+        "paired_cold_decomposition",
+    ):
         if not bool(timing.get(flag, False)):
             raise ValueError(f"{solver} timing fairness flag {flag} is false")
     if bool(timing.get("cross_formulation_cache_reuse", True)):
         raise ValueError(f"{solver} reused state across formulations")
     expected_shape = (N_ELECTRODES, N_ELECTRODES)
     for formulation in FORMULATIONS:
+        phase = timing.get(formulation, {})
+        cold = float(phase.get("cold_seconds", {}).get("median", math.nan))
+        warm = float(phase.get("warm_reuse_seconds", {}).get("median", math.nan))
+        if not (math.isfinite(cold) and math.isfinite(warm) and cold > warm > 0.0):
+            raise ValueError(f"{solver} {formulation} cold/warm timing is invalid")
         values = np.asarray(
             report.get("raw_electrode_voltages", {}).get(formulation),
             dtype=np.float64,
@@ -867,22 +884,34 @@ def timing_records_from_report(
     records = []
     for formulation in FORMULATIONS:
         formulation_timing = timing[formulation]
+        cold_median = float(formulation_timing["cold_seconds"]["median"])
+        warm_median = float(formulation_timing["warm_reuse_seconds"]["median"])
+        if not cold_median > warm_median > 0.0:
+            raise ValueError(
+                f"{report['solver']} {formulation} requires cold > warm reuse"
+            )
         records.append(
             {
                 "case_id": case_id,
                 "solver": report["solver"],
                 "formulation": formulation,
-                "cold_median_seconds": float(
-                    formulation_timing["cold_seconds"]["median"]
-                ),
+                "cold_median_seconds": cold_median,
                 "cold_iqr_seconds": float(formulation_timing["cold_seconds"]["iqr"]),
-                "warm_population_seconds": float(
-                    formulation_timing["warm_population_seconds"]
+                "setup_median_seconds": float(
+                    formulation_timing["setup_seconds"]["median"]
                 ),
-                "warm_median_seconds": float(
-                    formulation_timing["warm_seconds"]["median"]
+                "setup_iqr_seconds": float(formulation_timing["setup_seconds"]["iqr"]),
+                "cold_solve_median_seconds": float(
+                    formulation_timing["cold_solve_seconds"]["median"]
                 ),
-                "warm_iqr_seconds": float(formulation_timing["warm_seconds"]["iqr"]),
+                "cold_solve_iqr_seconds": float(
+                    formulation_timing["cold_solve_seconds"]["iqr"]
+                ),
+                "warm_reuse_median_seconds": warm_median,
+                "warm_reuse_iqr_seconds": float(
+                    formulation_timing["warm_reuse_seconds"]["iqr"]
+                ),
+                "cold_over_warm_reuse_speedup": float(cold_median / warm_median),
                 "assembly_seconds": (
                     float(timing["assembly_seconds"])
                     if "assembly_seconds" in timing
@@ -903,8 +932,8 @@ def aggregate_timing_metrics(
 ) -> dict[str, Any]:
     ratio_fields = {
         "cold": "cold_median_seconds",
-        "warm_population": "warm_population_seconds",
-        "warm_reuse": "warm_median_seconds",
+        "setup": "setup_median_seconds",
+        "warm_reuse": "warm_reuse_median_seconds",
     }
     per_case_ratios = []
     for case in CASES:
@@ -923,8 +952,10 @@ def aggregate_timing_metrics(
             per_case_ratios.append(ratio)
 
     summary = {}
+    absolute_summary = {}
     for solver in sorted({str(item["solver"]) for item in timing_records}):
         summary[solver] = {}
+        absolute_summary[solver] = {}
         solver_ratios = [item for item in per_case_ratios if item["solver"] == solver]
         for phase in ratio_fields:
             field = f"robin_over_classic_{phase}_ratio"
@@ -942,9 +973,41 @@ def aggregate_timing_metrics(
                 "robin_faster_case_count": int(np.count_nonzero(values < 1.0)),
                 "case_count": int(values.size),
             }
+        for formulation in FORMULATIONS:
+            selected = [
+                item
+                for item in timing_records
+                if item["solver"] == solver and item["formulation"] == formulation
+            ]
+            cold = np.asarray(
+                [item["cold_median_seconds"] for item in selected], dtype=np.float64
+            )
+            setup = np.asarray(
+                [item["setup_median_seconds"] for item in selected], dtype=np.float64
+            )
+            warm = np.asarray(
+                [item["warm_reuse_median_seconds"] for item in selected],
+                dtype=np.float64,
+            )
+            speedup = cold / warm
+            if np.any(speedup <= 1.0):
+                raise ValueError(f"{solver} {formulation} has cold <= warm reuse")
+            absolute_summary[solver][formulation] = {
+                "geometric_mean_cold_seconds": float(np.exp(np.mean(np.log(cold)))),
+                "geometric_mean_setup_seconds": float(np.exp(np.mean(np.log(setup)))),
+                "geometric_mean_warm_reuse_seconds": float(
+                    np.exp(np.mean(np.log(warm)))
+                ),
+                "geometric_mean_cold_over_warm_reuse_speedup": float(
+                    np.exp(np.mean(np.log(speedup)))
+                ),
+                "minimum_cold_over_warm_reuse_speedup": float(np.min(speedup)),
+                "case_count": int(speedup.size),
+            }
     return {
         "per_case_robin_over_classic_ratios": per_case_ratios,
         "solver_phase_summary": summary,
+        "solver_formulation_absolute_summary": absolute_summary,
     }
 
 
@@ -1111,11 +1174,16 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
         "timing_methodology": {
             "schema": TIMING_SCHEMA,
             "repeats": TIMING_REPEATS,
+            "operations_per_sample": TIMING_OPERATIONS_PER_SAMPLE,
             "scope": "preassembled_A_R_C_D_blocks",
             "rhs_per_sample": N_ELECTRODES,
             "alternating_order": True,
             "untimed_runtime_priming": True,
             "cross_formulation_cache_reuse": False,
+            "paired_cold_decomposition": True,
+            "cold_definition": "fresh state setup plus first 16-RHS solve",
+            "setup_definition": "state construction component paired within each cold operation; not a warm phase",
+            "warm_reuse_definition": "16-RHS solve using one retained per-formulation state",
             "ratio_definition": "Robin seconds divided by classic seconds; below 1 means Robin is faster",
         },
         "timing_records": timing_records,

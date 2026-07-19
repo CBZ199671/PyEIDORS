@@ -12,7 +12,9 @@ from scripts.benchmarks.compare_cem_formulations import (
     trigonometric_current_patterns,
 )
 from scripts.benchmarks.cem_fair_common import (
+    TIMING_SCHEMA,
     TIMING_SCOPE,
+    benchmark_preassembled_blocks,
     canonical_mesh_fingerprint,
     timing_summary,
     validate_solver_reports,
@@ -144,8 +146,19 @@ def _fair_report(solver: str, fingerprint: str = "a" * 64) -> dict[str, object]:
         },
         "linear_solver": {"scalar_dtype": "float64"},
         "timing": {
+            "schema": TIMING_SCHEMA,
             "scope": TIMING_SCOPE,
+            "operations_per_sample": 16,
+            "paired_cold_decomposition": True,
             "cross_formulation_cache_reuse": False,
+            "classic": {
+                "cold_seconds": {"median": 2.0},
+                "warm_reuse_seconds": {"median": 1.0},
+            },
+            "robin_transconductance": {
+                "cold_seconds": {"median": 2.0},
+                "warm_reuse_seconds": {"median": 1.0},
+            },
         },
     }
 
@@ -173,3 +186,41 @@ def test_timing_summary_reports_median_and_linear_iqr() -> None:
     assert summary["median"] == 3.0
     assert summary["iqr"] == 2.0
     assert summary["samples"] == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_v709_cold_setup_and_warm_reuse_are_paired_and_unambiguous() -> None:
+    robin_matrix = np.asarray([[3.0, 0.0], [0.0, 2.0]])
+    coupling = np.asarray([[-0.5, 0.0], [0.0, -0.5]])
+    electrode_matrix = np.eye(2)
+    currents = np.asarray([[1.0, -1.0], [-1.0, 1.0]])
+
+    timing, _, _ = benchmark_preassembled_blocks(
+        robin_matrix,
+        coupling,
+        electrode_matrix,
+        currents,
+        repeats=3,
+        operations_per_sample=4,
+    )
+
+    assert timing["schema"] == TIMING_SCHEMA
+    assert timing["paired_cold_decomposition"] is True
+    assert timing["operations_per_sample"] == 4
+    for formulation in ("classic", "robin_transconductance"):
+        phase = timing[formulation]
+        cold = phase["cold_seconds"]
+        setup = phase["setup_seconds"]
+        cold_solve = phase["cold_solve_seconds"]
+        warm = phase["warm_reuse_seconds"]
+        assert len(cold["samples"]) == 3
+        assert len(setup["samples"]) == 3
+        assert len(cold_solve["samples"]) == 3
+        assert len(warm["samples"]) == 3
+        assert all(
+            total >= component
+            for total, component in zip(cold["samples"], setup["samples"])
+        )
+        assert cold["median"] > warm["median"]
+        assert phase["cold_over_warm_reuse_speedup"] == pytest.approx(
+            cold["median"] / warm["median"]
+        )

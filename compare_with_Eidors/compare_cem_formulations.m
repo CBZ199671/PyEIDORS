@@ -39,6 +39,7 @@ if isfield(payload, 'drive_skip')
     config.drive_skip = double(payload.drive_skip);
 end
 config.timing_repeats = 11;
+config.timing_operations_per_sample = 16;
 repeat_override = str2double(getenv('CEM_TIMING_REPEATS'));
 if isfinite(repeat_override) && repeat_override >= 3
     config.timing_repeats = floor(repeat_override);
@@ -97,7 +98,8 @@ C = E(1:n_nodes, (n_nodes + 1):(n_nodes + L));
 D = E((n_nodes + 1):(n_nodes + L), (n_nodes + 1):(n_nodes + L));
 
 [timing, classic_potential, classic_voltage, robin_potential, robin_voltage] = ...
-    benchmark_preassembled_blocks(A_R, C, D, currents, config.timing_repeats);
+    benchmark_preassembled_blocks(A_R, C, D, currents, config.timing_repeats, ...
+    config.timing_operations_per_sample);
 timing.assembly_seconds = assembly_seconds;
 timing.mesh_import_seconds = 0;
 
@@ -206,82 +208,155 @@ fprintf('EIDORS CEM benchmark artifacts: %s\n', out_dir);
 
 
 function [timing, classic_potential, classic_voltage, robin_potential, robin_voltage] = ...
-    benchmark_preassembled_blocks(A_R, C, D, currents, repeats)
+    benchmark_preassembled_blocks(A_R, C, D, currents, repeats, operations_per_sample)
 classic_cold = zeros(repeats, 1);
 robin_cold = zeros(repeats, 1);
+classic_setup = zeros(repeats, 1);
+robin_setup = zeros(repeats, 1);
+classic_cold_solve = zeros(repeats, 1);
+robin_cold_solve = zeros(repeats, 1);
 % Prime MATLAB dispatch/allocator paths, then discard both fresh states.
 cold_classic(A_R, C, D, currents);
 cold_robin(A_R, C, D, currents);
 for repetition = 1:repeats
     if mod(repetition, 2) == 1
-        started = tic;
-        [classic_potential, classic_voltage] = cold_classic(A_R, C, D, currents);
-        classic_cold(repetition) = toc(started);
-        started = tic;
-        [robin_potential, robin_voltage] = cold_robin(A_R, C, D, currents);
-        robin_cold(repetition) = toc(started);
+        [classic_cold(repetition), classic_setup(repetition), ...
+            classic_cold_solve(repetition), classic_potential, classic_voltage] = ...
+            sample_cold_classic(A_R, C, D, currents, operations_per_sample);
+        [robin_cold(repetition), robin_setup(repetition), ...
+            robin_cold_solve(repetition), robin_potential, robin_voltage] = ...
+            sample_cold_robin(A_R, C, D, currents, operations_per_sample);
     else
-        started = tic;
-        [robin_potential, robin_voltage] = cold_robin(A_R, C, D, currents);
-        robin_cold(repetition) = toc(started);
-        started = tic;
-        [classic_potential, classic_voltage] = cold_classic(A_R, C, D, currents);
-        classic_cold(repetition) = toc(started);
+        [robin_cold(repetition), robin_setup(repetition), ...
+            robin_cold_solve(repetition), robin_potential, robin_voltage] = ...
+            sample_cold_robin(A_R, C, D, currents, operations_per_sample);
+        [classic_cold(repetition), classic_setup(repetition), ...
+            classic_cold_solve(repetition), classic_potential, classic_voltage] = ...
+            sample_cold_classic(A_R, C, D, currents, operations_per_sample);
     end
 end
 
-started = tic;
 classic_state = build_classic_state(A_R, C, D);
-classic_population = toc(started);
-started = tic;
 robin_state = build_robin_state(A_R, C, D);
-robin_population = toc(started);
 classic_warm = zeros(repeats, 1);
 robin_warm = zeros(repeats, 1);
 for repetition = 1:repeats
     if mod(repetition, 2) == 1
-        started = tic;
-        [robin_potential, robin_voltage] = solve_robin(robin_state, currents);
-        robin_warm(repetition) = toc(started);
-        started = tic;
-        [classic_potential, classic_voltage] = solve_classic(classic_state, currents);
-        classic_warm(repetition) = toc(started);
+        [robin_warm(repetition), robin_potential, robin_voltage] = ...
+            sample_warm_robin(robin_state, currents, operations_per_sample);
+        [classic_warm(repetition), classic_potential, classic_voltage] = ...
+            sample_warm_classic(classic_state, currents, operations_per_sample);
     else
-        started = tic;
-        [classic_potential, classic_voltage] = solve_classic(classic_state, currents);
-        classic_warm(repetition) = toc(started);
-        started = tic;
-        [robin_potential, robin_voltage] = solve_robin(robin_state, currents);
-        robin_warm(repetition) = toc(started);
+        [classic_warm(repetition), classic_potential, classic_voltage] = ...
+            sample_warm_classic(classic_state, currents, operations_per_sample);
+        [robin_warm(repetition), robin_potential, robin_voltage] = ...
+            sample_warm_robin(robin_state, currents, operations_per_sample);
     end
 end
 
-timing.schema = 'cem-fair-timing-v1';
+timing.schema = 'cem-fair-timing-v2';
 timing.scope = 'preassembled_A_R_C_D_blocks';
 timing.repeats = repeats;
+timing.operations_per_sample = operations_per_sample;
 timing.rhs_count = size(currents, 2);
 timing.alternating_order = true;
 timing.untimed_runtime_priming = true;
 timing.cross_formulation_cache_reuse = false;
+timing.paired_cold_decomposition = true;
 timing.classic.cold_seconds = summarize_samples(classic_cold);
-timing.classic.warm_population_seconds = classic_population;
-timing.classic.warm_seconds = summarize_samples(classic_warm);
-timing.classic.cold_sparse_factorizations = repeats;
+timing.classic.setup_seconds = summarize_samples(classic_setup);
+timing.classic.cold_solve_seconds = summarize_samples(classic_cold_solve);
+timing.classic.warm_reuse_seconds = summarize_samples(classic_warm);
+timing.classic.cold_over_warm_reuse_speedup = ...
+    timing.classic.cold_seconds.median / timing.classic.warm_reuse_seconds.median;
+timing.classic.cold_sparse_factorizations = repeats * operations_per_sample;
 timing.classic.cold_dense_factorizations = 0;
 timing.classic.warm_sparse_factorizations = 1;
 timing.classic.warm_dense_factorizations = 0;
-timing.classic.warm_cache_hits = repeats;
+timing.classic.warm_cache_hits = repeats * operations_per_sample;
 timing.classic.rhs_solves_per_sample = size(currents, 2);
 timing.robin_transconductance.cold_seconds = summarize_samples(robin_cold);
-timing.robin_transconductance.warm_population_seconds = robin_population;
-timing.robin_transconductance.warm_seconds = summarize_samples(robin_warm);
-timing.robin_transconductance.cold_sparse_factorizations = repeats;
-timing.robin_transconductance.cold_dense_factorizations = repeats;
+timing.robin_transconductance.setup_seconds = summarize_samples(robin_setup);
+timing.robin_transconductance.cold_solve_seconds = summarize_samples(robin_cold_solve);
+timing.robin_transconductance.warm_reuse_seconds = summarize_samples(robin_warm);
+timing.robin_transconductance.cold_over_warm_reuse_speedup = ...
+    timing.robin_transconductance.cold_seconds.median / ...
+    timing.robin_transconductance.warm_reuse_seconds.median;
+timing.robin_transconductance.cold_sparse_factorizations = ...
+    repeats * operations_per_sample;
+timing.robin_transconductance.cold_dense_factorizations = ...
+    repeats * operations_per_sample;
 timing.robin_transconductance.warm_sparse_factorizations = 1;
 timing.robin_transconductance.warm_dense_factorizations = 1;
-timing.robin_transconductance.warm_cache_hits = repeats;
+timing.robin_transconductance.warm_cache_hits = repeats * operations_per_sample;
 timing.robin_transconductance.rhs_solves_per_sample = size(currents, 2);
 timing.robin_transconductance.response_basis_rhs_count = size(D, 1) - 1;
+end
+
+
+function [total_mean, setup_mean, solve_mean, potential, voltage] = ...
+    sample_cold_classic(A_R, C, D, currents, operations)
+totals = zeros(operations, 1);
+setups = zeros(operations, 1);
+solves = zeros(operations, 1);
+for operation = 1:operations
+    total_started = tic;
+    setup_started = tic;
+    state = build_classic_state(A_R, C, D);
+    setups(operation) = toc(setup_started);
+    solve_started = tic;
+    [potential, voltage] = solve_classic(state, currents);
+    solves(operation) = toc(solve_started);
+    totals(operation) = toc(total_started);
+end
+total_mean = mean(totals);
+setup_mean = mean(setups);
+solve_mean = mean(solves);
+end
+
+
+function [total_mean, setup_mean, solve_mean, potential, voltage] = ...
+    sample_cold_robin(A_R, C, D, currents, operations)
+totals = zeros(operations, 1);
+setups = zeros(operations, 1);
+solves = zeros(operations, 1);
+for operation = 1:operations
+    total_started = tic;
+    setup_started = tic;
+    state = build_robin_state(A_R, C, D);
+    setups(operation) = toc(setup_started);
+    solve_started = tic;
+    [potential, voltage] = solve_robin(state, currents);
+    solves(operation) = toc(solve_started);
+    totals(operation) = toc(total_started);
+end
+total_mean = mean(totals);
+setup_mean = mean(setups);
+solve_mean = mean(solves);
+end
+
+
+function [elapsed_mean, potential, voltage] = ...
+    sample_warm_classic(state, currents, operations)
+samples = zeros(operations, 1);
+for operation = 1:operations
+    started = tic;
+    [potential, voltage] = solve_classic(state, currents);
+    samples(operation) = toc(started);
+end
+elapsed_mean = mean(samples);
+end
+
+
+function [elapsed_mean, potential, voltage] = ...
+    sample_warm_robin(state, currents, operations)
+samples = zeros(operations, 1);
+for operation = 1:operations
+    started = tic;
+    [potential, voltage] = solve_robin(state, currents);
+    samples(operation) = toc(started);
+end
+elapsed_mean = mean(samples);
 end
 
 
