@@ -30,9 +30,14 @@ payload = load(mesh_mat);
 config.n_electrodes = double(payload.n_elec);
 config.radius_m = 4.0;
 config.conductivity_s_per_m = double(payload.background);
+config.conductivity = config.conductivity_s_per_m;
 config.contact_impedance = double(payload.contact_impedance);
 config.electrode_coverage = double(payload.electrode_coverage);
 config.potential_order = 1;
+config.drive_skip = NaN;
+if isfield(payload, 'drive_skip')
+    config.drive_skip = double(payload.drive_skip);
+end
 config.timing_repeats = 11;
 repeat_override = str2double(getenv('CEM_TIMING_REPEATS'));
 if isfinite(repeat_override) && repeat_override >= 3
@@ -148,6 +153,14 @@ save(fullfile(out_dir, 'eidors_raw_voltages.mat'), ...
     'classic_potential', 'robin_potential', '-v7');
 
 report.solver = 'EIDORS';
+report.suite_schema = '';
+if isfield(payload, 'suite_schema')
+    report.suite_schema = char(payload.suite_schema);
+end
+report.case_id = '';
+if isfield(payload, 'case_id')
+    report.case_id = char(payload.case_id);
+end
 report.eidors_version = eidors_obj('eidors_version');
 report.interpreter_version = eidors_obj('interpreter_version');
 report.physical_config = config;
