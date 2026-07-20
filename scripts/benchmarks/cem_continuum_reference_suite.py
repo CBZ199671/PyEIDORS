@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 import json
 import math
 from pathlib import Path
-import shutil
 import sys
 from typing import Any
 
@@ -455,6 +454,119 @@ def uncertainty_aware_ranking(
         "ordering": [row["solver"] for row in rows] if strict else None,
         "best_tie": best_tie,
         "intervals": rows,
+    }
+
+
+def shared_reference_sensitivity(
+    candidates: dict[str, np.ndarray],
+    references: dict[str, np.ndarray],
+    *,
+    primary_reference: str = "final_extrapolated",
+) -> dict[str, Any]:
+    """Compare solver outputs against correlated variants of one reference."""
+
+    if not candidates:
+        raise ValueError("shared-reference sensitivity requires solver candidates")
+    if primary_reference not in references:
+        raise ValueError(f"missing primary reference {primary_reference}")
+    solver_names = [solver for solver in SOLVERS if solver in candidates]
+    solver_names.extend(sorted(set(candidates) - set(solver_names)))
+    candidate_arrays = {
+        solver: np.asarray(candidates[solver], dtype=np.float64)
+        for solver in solver_names
+    }
+    shape = next(iter(candidate_arrays.values())).shape
+    if not shape or any(array.shape != shape for array in candidate_arrays.values()):
+        raise ValueError("all shared-reference candidates must have one common shape")
+    if any(not np.all(np.isfinite(array)) for array in candidate_arrays.values()):
+        raise ValueError("shared-reference candidates must be finite")
+
+    reference_arrays: dict[str, np.ndarray] = {}
+    reference_rankings: dict[str, list[dict[str, Any]]] = {}
+    for name, values in references.items():
+        reference = np.asarray(values, dtype=np.float64)
+        if reference.shape != shape or not np.all(np.isfinite(reference)):
+            raise ValueError(f"invalid shared reference variant {name}")
+        if np.linalg.norm(reference) == 0.0:
+            raise ValueError(f"shared reference variant {name} has zero norm")
+        reference_arrays[str(name)] = reference
+        rows = [
+            {
+                "solver": solver,
+                "continuum_relative_l2": _relative_l2(
+                    candidate_arrays[solver],
+                    reference,
+                ),
+            }
+            for solver in solver_names
+        ]
+        rows.sort(key=lambda row: (row["continuum_relative_l2"], row["solver"]))
+        reference_rankings[str(name)] = rows
+
+    orderings = {
+        name: [str(row["solver"]) for row in rows]
+        for name, rows in reference_rankings.items()
+    }
+    ordering_values = [tuple(order) for order in orderings.values()]
+    best_values = [order[0] for order in ordering_values]
+    primary = reference_arrays[primary_reference]
+    primary_norm_squared = float(np.vdot(primary, primary).real)
+    pairwise: list[dict[str, Any]] = []
+    for first_index, solver_a in enumerate(solver_names):
+        for solver_b in solver_names[first_index + 1 :]:
+            first = candidate_arrays[solver_a]
+            second = candidate_arrays[solver_b]
+            first_error = first - primary
+            second_error = second - primary
+            delta = second - first
+            first_norm = float(np.linalg.norm(first))
+            second_norm = float(np.linalg.norm(second))
+            separation_denominator = 0.5 * (first_norm + second_norm)
+            if separation_denominator == 0.0:
+                raise ValueError("pairwise solver voltage norm is zero")
+            dot = float(np.vdot(first_error, delta).real)
+            error_norm = float(np.linalg.norm(first_error))
+            delta_norm = float(np.linalg.norm(delta))
+            alignment = (
+                float(dot / (error_norm * delta_norm))
+                if error_norm > 0.0 and delta_norm > 0.0
+                else None
+            )
+            squared_error_difference = float(
+                (
+                    np.vdot(second_error, second_error).real
+                    - np.vdot(first_error, first_error).real
+                )
+                / primary_norm_squared
+            )
+            cross_term = float(2.0 * dot / primary_norm_squared)
+            delta_squared = float(delta_norm**2 / primary_norm_squared)
+            pairwise.append(
+                {
+                    "solver_a": solver_a,
+                    "solver_b": solver_b,
+                    "symmetric_relative_voltage_separation": float(
+                        delta_norm / separation_denominator
+                    ),
+                    "primary_reference_error_alignment_cosine": alignment,
+                    "squared_error_difference_relative": squared_error_difference,
+                    "cross_term_relative": cross_term,
+                    "delta_squared_relative": delta_squared,
+                    "squared_error_identity_closure_abs": float(
+                        abs(squared_error_difference - cross_term - delta_squared)
+                    ),
+                }
+            )
+    return {
+        "primary_reference": primary_reference,
+        "reference_rankings": reference_rankings,
+        "reference_orderings": orderings,
+        "nominal_ordering": orderings[primary_reference],
+        "ordering_stable_across_references": bool(ordering_values)
+        and all(order == ordering_values[0] for order in ordering_values[1:]),
+        "best_solver_stable_across_references": bool(best_values)
+        and all(solver == best_values[0] for solver in best_values[1:]),
+        "pairwise_solver_comparisons": pairwise,
     }
 
 
@@ -1070,6 +1182,8 @@ def _plot_convergence(metrics: list[dict[str, Any]], path: Path) -> None:
 def _write_markdown_report(
     path: Path,
     report: dict[str, Any],
+    *,
+    plot_reference: str,
 ) -> None:
     references = report["references"]
     mesh_levels = report["mesh_levels"]
@@ -1083,7 +1197,37 @@ def _write_markdown_report(
         for value in report["finest_uncertainty_aware_rankings"].values()
     )
     ranking_count = len(report["finest_uncertainty_aware_rankings"])
-    solver_spread_ratios = []
+    shared_results = report["finest_shared_reference_sensitivity"]
+    stable_order_count = sum(
+        int(value["ordering_stable_across_references"])
+        for value in shared_results.values()
+    )
+    stable_best_count = sum(
+        int(value["best_solver_stable_across_references"])
+        for value in shared_results.values()
+    )
+    nominal_win_counts = {solver: 0 for solver in SOLVERS}
+    pairwise_comparisons = []
+    for value in shared_results.values():
+        nominal_win_counts[value["nominal_ordering"][0]] += 1
+        pairwise_comparisons.extend(value["pairwise_solver_comparisons"])
+    pairwise_separations = [
+        item["symmetric_relative_voltage_separation"] for item in pairwise_comparisons
+    ]
+    identity_closures = [
+        item["squared_error_identity_closure_abs"] for item in pairwise_comparisons
+    ]
+    pyeidors_ngsolve_alignments = [
+        item["primary_reference_error_alignment_cosine"]
+        for item in pairwise_comparisons
+        if item["solver_a"] == "PyEIDORS/DOLFINx"
+        and item["solver_b"] == "NGSolve"
+        and item["primary_reference_error_alignment_cosine"] is not None
+    ]
+    nominal_wins_text = "、".join(
+        f"{solver} {count}/{ranking_count}"
+        for solver, count in nominal_win_counts.items()
+    )
     solver_spreads = []
     for case in CASES:
         for formulation in FORMULATIONS:
@@ -1096,9 +1240,6 @@ def _write_markdown_report(
             errors = [item["continuum_relative_l2"] for item in selected]
             spread = max(errors) - min(errors)
             solver_spreads.append(spread)
-            solver_spread_ratios.append(
-                spread / selected[0]["reference_relative_uncertainty"]
-            )
     classic_robin_max = max(item["classic_robin_relative_l2"] for item in metrics)
     fitted_orders = [item["fitted_observed_order_last_three"] for item in convergence]
     monotone_count = 0
@@ -1130,9 +1271,15 @@ def _write_markdown_report(
         "",
         "本实验回答连续物理问题，而非固定有限维矩阵的舍入误差。三种求解器在每一级均导入同一份 P1 网格；Classic 与 Robin 使用相同物理量、原始 SI 电压和零均值规范。",
         "",
-        f"最细网格的 {ranking_count} 个 case/formulation 排名中，只有 {strict_count} 个满足参考不确定度区间完全分离；其余必须报告并列，不能把区间重叠解释为严格精度排名。",
+        f"以最终 Richardson 外推为共同参考时，最细网格 {ranking_count} 个 case/formulation 的名义第一名计数为：{nominal_wins_text}。但这只是连续总误差的名义顺序，不是离散线性求解精度顺序。",
         "",
-        f"全部 {monotone_count}/30 条收敛序列随网格加密单调下降，最后三级拟合阶位于 {min(fitted_orders):.3f}–{max(fitted_orders):.3f}。最细网格三个求解器误差的最大绝对 spread 为 {max(solver_spreads):.3e}，仅为对应连续参考不确定度的 {max(solver_spread_ratios):.3e}；Classic/Robin 最大内部差为 {classic_robin_max:.3e}。这说明可观测误差由共同 P1/直边圆域离散主导，而不是求解器品牌或两种等价 CEM 代数形式主导。",
+        f"共享参考敏感性显示：前一外推、最终外推和最细原始参考三种共同参考下，完整顺序有 {stable_order_count}/{ranking_count} 组不变，第一名有 {stable_best_count}/{ranking_count} 组不变。旧的独立区间规则只有 {strict_count}/{ranking_count} 组区间完全分离；它可以保留为保守界，但不能作为共享参考下的唯一排名判据。",
+        "",
+        f"全部 {monotone_count}/30 条收敛序列随网格加密单调下降，最后三级拟合阶位于 {min(fitted_orders):.3f}–{max(fitted_orders):.3f}。最细网格三个求解器误差的最大绝对 spread 为 {max(solver_spreads):.3e}，而求解器成对电压分离仅为 {min(pairwise_separations):.3e}–{max(pairwise_separations):.3e}；Classic/Robin 最大内部差为 {classic_robin_max:.3e}。可观测总误差由共同 P1/直边圆域离散主导。",
+        "",
+        f"![真实圆域 P1 CEM 网格收敛]({plot_reference})",
+        "",
+        "图中横轴从粗网格向细网格推进，纵轴为五组物理 case 的误差几何平均；三条 solver 曲线在图示尺度上重合，说明共同离散误差远大于 solver 间差异。",
         "",
         "## 独立连续参考解为什么成立",
         "",
@@ -1206,7 +1353,9 @@ def _write_markdown_report(
     lines.extend(
         [
             "",
-            "## 最细网格不确定度感知排名",
+            "## 保守参考区间检查（不是唯一排名）",
+            "",
+            "这里把同一个参考不确定度分别加减到每个 solver 的误差上，忽略了误差之间共享同一参考所产生的相关性。因此它是保守边界检查，不是共享参考下的唯一结论。",
             "",
             "| Case | Formulation | 严格顺序成立 | 最优并列集合 |",
             "|---|---|:---:|---|",
@@ -1219,6 +1368,51 @@ def _write_markdown_report(
             f"| {case_id} | {formulation} | "
             f"{'是' if ranking['strict_order_supported'] else '否'} | {tie_text} |"
         )
+    lines.extend(
+        [
+            "",
+            "## 共享参考敏感性",
+            "",
+            "三个 solver 在同一行始终使用同一个参考变体，所以参考变化是相关扰动。表中顺序均按误差从小到大，比较前一 Richardson 外推、最终外推和最细 Nyström 原始解；若顺序随共同参考改变，说明 solver 间的微小总误差差不足以支撑稳定品牌排名。",
+            "",
+            "| Case | Formulation | 前一外推顺序 | 最终外推顺序 | 最细原始顺序 | 全序/第一名稳定 | 最大成对电压分离 |",
+            "|---|---|---|---|---|:---:|---:|",
+        ]
+    )
+    for key, sensitivity in shared_results.items():
+        case_id, formulation = key.split(":", maxsplit=1)
+        orders = sensitivity["reference_orderings"]
+        maximum_separation = max(
+            item["symmetric_relative_voltage_separation"]
+            for item in sensitivity["pairwise_solver_comparisons"]
+        )
+        stable_text = (
+            f"{'是' if sensitivity['ordering_stable_across_references'] else '否'} / "
+            f"{'是' if sensitivity['best_solver_stable_across_references'] else '否'}"
+        )
+        lines.append(
+            f"| {case_id} | {formulation} | "
+            f"{' < '.join(orders['previous_extrapolated'])} | "
+            f"{' < '.join(orders['final_extrapolated'])} | "
+            f"{' < '.join(orders['finest_raw'])} | {stable_text} | "
+            f"{maximum_separation:.3e} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## 离散误差、代数误差与偶然抵消",
+            "",
+            "设连续真值为 $U_*$，同一网格有限维方程的数学精确解为 $U_h^*$，solver 输出为 $\\widehat U_{h,s}$。定义共同的离散误差 $D_h=U_h^*-U_*$ 和 solver 的组装/代数误差 $a_{h,s}=\\widehat U_{h,s}-U_h^*$，则",
+            "",
+            "$$\\|\\widehat U_{h,s}-U_*\\|^2=\\|D_h\\|^2+2\\langle D_h,a_{h,s}\\rangle+\\|a_{h,s}\\|^2.$$",
+            "",
+            "连续总误差包含交叉项。即使某个 solver 的 $\\|a_{h,s}\\|$ 更大，只要方向与主导离散误差相反，也可能因抵消得到略小的 $\\|\\widehat U_{h,s}-U_*\\|$。因此连续总误差的名义第一名不能自动解释为线性代数更准确。",
+            "",
+            f"保存的最细网格输出还逐对验证了精确恒等式 $\\|e_b\\|^2-\\|e_a\\|^2=2\\langle e_a,\\delta\\rangle+\\|\\delta\\|^2$，归一化闭合误差最大为 {max(identity_closures):.3e}。以 PyEIDORS 为锚、NGSolve 为比较对象时，$e_{{Py}}$ 与 $U_{{NG}}-U_{{Py}}$ 的余弦范围为 [{min(pyeidors_ngsolve_alignments):.3f}, {max(pyeidors_ngsolve_alignments):.3f}]；负值直接显示了抵消方向。",
+            "",
+            "证据层级因此固定为：有理 QQ 实验负责回答同一有限维 P1 系统的离散组装/代数精度；本真实圆域实验负责回答当前网格输出到连续物理解的总误差。没有同网格高精度离散真值时，后者不能覆盖前者的代数精度结论。",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -1244,11 +1438,11 @@ def _write_markdown_report(
             "- `continuum_relative_l2`：$\\|U_h-U_{cont}\\|_F/\\|U_{cont}\\|_F$，包含 P1 场离散误差与直边三角形对圆域的几何误差。",
             "- `classic_robin_relative_l2`：同一求解器、同一网格内两种代数实现的差；它主要反映浮点舍入，不是连续 FEM 误差。",
             "- `fem_extrapolated_continuum_relative_l2`：由最后三级公共网格的电极电压独立 Richardson 外推后，与 Fourier–Nyström 连续参考比较。",
-            "- `reference_relative_uncertainty`：相邻两次连续参考外推结果的差，严格排名必须超过该不确定度。",
+            "- `reference_relative_uncertainty`：相邻两次连续参考外推结果的差；对各 solver 独立加减它是保守界，共享参考敏感性才保留 solver 误差之间的相关结构。",
             "",
             "## 限制",
             "",
-            "本套件针对均匀、各向同性二维圆域。非圆域、非均匀电导率和三维问题没有解析圆域 NtD 对角化，需要另一套独立高阶体积或边界参考。当前主比较固定为共同 P1/float64，因此回答的是受控离散精度，而不是各软件可用最高阶单元的能力上限。",
+            "本套件针对均匀、各向同性二维圆域。非圆域、非均匀电导率和三维问题没有解析圆域 NtD 对角化，需要另一套独立高阶体积或边界参考。当前主比较固定为共同 P1/float64，因此回答当前离散输出的连续总误差，而不是各软件可用最高阶单元的能力上限。三种参考变体只检验参考敏感性，不能替代同网格高精度离散真值；代数精度结论应引用有理 QQ 实验。",
             "",
             "## 可复现产物",
             "",
@@ -1312,6 +1506,7 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
                 )
     convergence = _convergence_summary(metrics, voltage_lookup, references)
     finest_rankings: dict[str, Any] = {}
+    shared_reference_results: dict[str, Any] = {}
     finest_level = MESH_LEVELS[-1].level_id
     for case in CASES:
         for formulation in FORMULATIONS:
@@ -1328,6 +1523,27 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
                     reference_relative_uncertainty=float(
                         references[case.case_id]["reference_relative_uncertainty"]
                     ),
+                )
+            )
+            reference = references[case.case_id]
+            candidates = {
+                solver: voltage_lookup[
+                    (case.case_id, finest_level, solver, formulation)
+                ]
+                for solver in SOLVERS
+            }
+            shared_reference_results[f"{case.case_id}:{formulation}"] = (
+                shared_reference_sensitivity(
+                    candidates,
+                    {
+                        "previous_extrapolated": np.asarray(
+                            reference["previous_extrapolated_voltages"]
+                        ),
+                        "final_extrapolated": np.asarray(
+                            reference["reference_voltages"]
+                        ),
+                        "finest_raw": np.asarray(reference["finest_raw_voltages"]),
+                    },
                 )
             )
     mesh_levels = manifest["mesh_levels"]
@@ -1355,6 +1571,20 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
         "metrics": metrics,
         "convergence": convergence,
         "finest_uncertainty_aware_rankings": finest_rankings,
+        "finest_shared_reference_sensitivity": shared_reference_results,
+        "accuracy_evidence_hierarchy": {
+            "discrete_algebraic_accuracy": (
+                "owned by the exact rational QQ suite on a common finite P1 system"
+            ),
+            "continuum_total_accuracy": (
+                "owned by this true-circle suite against the independent disk reference"
+            ),
+            "non_override_rule": (
+                "continuum total-error ordering does not override exact discrete "
+                "algebraic ordering without a same-mesh high-precision discrete target"
+            ),
+            "decomposition": ("||D_h+a_hs||^2=||D_h||^2+2<D_h,a_hs>+||a_hs||^2"),
+        },
         "artifacts": {
             "metrics_csv": csv_path.name,
             "plot": plot_path.name,
@@ -1363,8 +1593,18 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
     }
     json.dumps(report, allow_nan=False)
     _write_json(output_path / "cem_continuum_accuracy.json", report)
-    _write_markdown_report(report_path, report)
-    shutil.copyfile(report_path, ROOT / "docs" / "benchmarks" / report_path.name)
+    _write_markdown_report(
+        report_path,
+        report,
+        plot_reference=plot_path.name,
+    )
+    _write_markdown_report(
+        ROOT / "docs" / "benchmarks" / report_path.name,
+        report,
+        plot_reference=(
+            "../../output/cem_continuum_accuracy/cem_continuum_convergence.png"
+        ),
+    )
     return report
 
 

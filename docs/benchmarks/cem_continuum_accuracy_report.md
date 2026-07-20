@@ -4,9 +4,15 @@
 
 本实验回答连续物理问题，而非固定有限维矩阵的舍入误差。三种求解器在每一级均导入同一份 P1 网格；Classic 与 Robin 使用相同物理量、原始 SI 电压和零均值规范。
 
-最细网格的 10 个 case/formulation 排名中，只有 0 个满足参考不确定度区间完全分离；其余必须报告并列，不能把区间重叠解释为严格精度排名。
+以最终 Richardson 外推为共同参考时，最细网格 10 个 case/formulation 的名义第一名计数为：PyEIDORS/DOLFINx 0/10、NGSolve 10/10、EIDORS 0/10。但这只是连续总误差的名义顺序，不是离散线性求解精度顺序。
 
-全部 30/30 条收敛序列随网格加密单调下降，最后三级拟合阶位于 1.583–1.837。最细网格三个求解器误差的最大绝对 spread 为 1.803e-14，仅为对应连续参考不确定度的 3.226e-06；Classic/Robin 最大内部差为 4.372e-15。这说明可观测误差由共同 P1/直边圆域离散主导，而不是求解器品牌或两种等价 CEM 代数形式主导。
+共享参考敏感性显示：前一外推、最终外推和最细原始参考三种共同参考下，完整顺序有 9/10 组不变，第一名有 10/10 组不变。旧的独立区间规则只有 0/10 组区间完全分离；它可以保留为保守界，但不能作为共享参考下的唯一排名判据。
+
+全部 30/30 条收敛序列随网格加密单调下降，最后三级拟合阶位于 1.583–1.837。最细网格三个求解器误差的最大绝对 spread 为 1.803e-14，而求解器成对电压分离仅为 5.075e-16–3.100e-14；Classic/Robin 最大内部差为 4.372e-15。可观测总误差由共同 P1/直边圆域离散主导。
+
+![真实圆域 P1 CEM 网格收敛](../../output/cem_continuum_accuracy/cem_continuum_convergence.png)
+
+图中横轴从粗网格向细网格推进，纵轴为五组物理 case 的误差几何平均；三条 solver 曲线在图示尺度上重合，说明共同离散误差远大于 solver 间差异。
 
 ## 独立连续参考解为什么成立
 
@@ -58,7 +64,9 @@ $$\widehat u_n=\frac{R}{\sigma |n|}\widehat q_n,\qquad n\ne0.$$
 | C5 | NGSolve | 2.562e-03 | 2.562e-03 | 3.945e-15 |
 | C5 | EIDORS | 2.562e-03 | 2.562e-03 | 1.634e-15 |
 
-## 最细网格不确定度感知排名
+## 保守参考区间检查（不是唯一排名）
+
+这里把同一个参考不确定度分别加减到每个 solver 的误差上，忽略了误差之间共享同一参考所产生的相关性。因此它是保守边界检查，不是共享参考下的唯一结论。
 
 | Case | Formulation | 严格顺序成立 | 最优并列集合 |
 |---|---|:---:|---|
@@ -72,6 +80,35 @@ $$\widehat u_n=\frac{R}{\sigma |n|}\widehat q_n,\qquad n\ne0.$$
 | C4 | robin_transconductance | 否 | NGSolve, EIDORS, PyEIDORS/DOLFINx |
 | C5 | classic | 否 | NGSolve, PyEIDORS/DOLFINx, EIDORS |
 | C5 | robin_transconductance | 否 | NGSolve, PyEIDORS/DOLFINx, EIDORS |
+
+## 共享参考敏感性
+
+三个 solver 在同一行始终使用同一个参考变体，所以参考变化是相关扰动。表中顺序均按误差从小到大，比较前一 Richardson 外推、最终外推和最细 Nyström 原始解；若顺序随共同参考改变，说明 solver 间的微小总误差差不足以支撑稳定品牌排名。
+
+| Case | Formulation | 前一外推顺序 | 最终外推顺序 | 最细原始顺序 | 全序/第一名稳定 | 最大成对电压分离 |
+|---|---|---|---|---|:---:|---:|
+| C1 | classic | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < EIDORS < PyEIDORS/DOLFINx | 否 / 是 | 5.840e-15 |
+| C1 | robin_transconductance | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | 是 / 是 | 5.396e-15 |
+| C2 | classic | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | 是 / 是 | 3.017e-14 |
+| C2 | robin_transconductance | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | 是 / 是 | 3.100e-14 |
+| C3 | classic | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | 是 / 是 | 3.151e-15 |
+| C3 | robin_transconductance | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | 是 / 是 | 2.895e-15 |
+| C4 | classic | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | 是 / 是 | 3.743e-15 |
+| C4 | robin_transconductance | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | NGSolve < EIDORS < PyEIDORS/DOLFINx | 是 / 是 | 3.305e-15 |
+| C5 | classic | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | 是 / 是 | 9.816e-15 |
+| C5 | robin_transconductance | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | NGSolve < PyEIDORS/DOLFINx < EIDORS | 是 / 是 | 7.716e-15 |
+
+## 离散误差、代数误差与偶然抵消
+
+设连续真值为 $U_*$，同一网格有限维方程的数学精确解为 $U_h^*$，solver 输出为 $\widehat U_{h,s}$。定义共同的离散误差 $D_h=U_h^*-U_*$ 和 solver 的组装/代数误差 $a_{h,s}=\widehat U_{h,s}-U_h^*$，则
+
+$$\|\widehat U_{h,s}-U_*\|^2=\|D_h\|^2+2\langle D_h,a_{h,s}\rangle+\|a_{h,s}\|^2.$$
+
+连续总误差包含交叉项。即使某个 solver 的 $\|a_{h,s}\|$ 更大，只要方向与主导离散误差相反，也可能因抵消得到略小的 $\|\widehat U_{h,s}-U_*\|$。因此连续总误差的名义第一名不能自动解释为线性代数更准确。
+
+保存的最细网格输出还逐对验证了精确恒等式 $\|e_b\|^2-\|e_a\|^2=2\langle e_a,\delta\rangle+\|\delta\|^2$，归一化闭合误差最大为 1.235e-20。以 PyEIDORS 为锚、NGSolve 为比较对象时，$e_{Py}$ 与 $U_{NG}-U_{Py}$ 的余弦范围为 [-0.990, -0.596]；负值直接显示了抵消方向。
+
+证据层级因此固定为：有理 QQ 实验负责回答同一有限维 P1 系统的离散组装/代数精度；本真实圆域实验负责回答当前网格输出到连续物理解的总误差。没有同网格高精度离散真值时，后者不能覆盖前者的代数精度结论。
 
 ## 收敛与 FEM 外推
 
@@ -113,11 +150,11 @@ $$\widehat u_n=\frac{R}{\sigma |n|}\widehat q_n,\qquad n\ne0.$$
 - `continuum_relative_l2`：$\|U_h-U_{cont}\|_F/\|U_{cont}\|_F$，包含 P1 场离散误差与直边三角形对圆域的几何误差。
 - `classic_robin_relative_l2`：同一求解器、同一网格内两种代数实现的差；它主要反映浮点舍入，不是连续 FEM 误差。
 - `fem_extrapolated_continuum_relative_l2`：由最后三级公共网格的电极电压独立 Richardson 外推后，与 Fourier–Nyström 连续参考比较。
-- `reference_relative_uncertainty`：相邻两次连续参考外推结果的差，严格排名必须超过该不确定度。
+- `reference_relative_uncertainty`：相邻两次连续参考外推结果的差；对各 solver 独立加减它是保守界，共享参考敏感性才保留 solver 误差之间的相关结构。
 
 ## 限制
 
-本套件针对均匀、各向同性二维圆域。非圆域、非均匀电导率和三维问题没有解析圆域 NtD 对角化，需要另一套独立高阶体积或边界参考。当前主比较固定为共同 P1/float64，因此回答的是受控离散精度，而不是各软件可用最高阶单元的能力上限。
+本套件针对均匀、各向同性二维圆域。非圆域、非均匀电导率和三维问题没有解析圆域 NtD 对角化，需要另一套独立高阶体积或边界参考。当前主比较固定为共同 P1/float64，因此回答当前离散输出的连续总误差，而不是各软件可用最高阶单元的能力上限。三种参考变体只检验参考敏感性，不能替代同网格高精度离散真值；代数精度结论应引用有理 QQ 实验。
 
 ## 可复现产物
 

@@ -1498,7 +1498,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T591 | x | Backprop unambiguous paired CEM cold/setup/warm timing + absolute speedup report | V688,V691,V697,V706,V708,V709 |
 | T592 | x | Add true-circle h-refinement + independent continuum CEM reference + cross-FEM convergence report | V683,V684,V686,V687,V691,V692,V697,V698,V699,V705,V706,V708,V710,V711,V712,V713,V714,V715,V716 |
 | T593 | x | Expand exact rational CEM to nested mesh-refinement sequence + solver-accuracy report | V683,V686,V687,V691,V692,V697,V698,V699,V700,V701,V702,V703,V704,V705,V706,V707,V708,V709,V717,V718,V719,V720 |
-| T594 | . | Reconcile true-circle total error with rational discrete accuracy + shared-reference sensitivity | V705,V706,V710,V711,V712,V713,V714,V715,V716,V720,V721,V722 |
+| T594 | x | Reconcile true-circle total error with rational discrete accuracy + shared-reference sensitivity | V705,V706,V710,V711,V712,V713,V714,V715,V716,V720,V721,V722 |
 
 ## §B — bugs
 

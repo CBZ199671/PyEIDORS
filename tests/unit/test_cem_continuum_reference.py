@@ -18,6 +18,7 @@ from scripts.benchmarks.cem_continuum_reference_suite import (
     MESH_LEVELS,
     generalized_richardson_triplet,
     generate_true_circle_mesh,
+    shared_reference_sensitivity,
     uncertainty_aware_ranking,
 )
 from scripts.benchmarks import cem_continuum_reference_suite as continuum_suite
@@ -131,6 +132,31 @@ def test_v714_uncertainty_aware_ranking_does_not_rank_overlapping_errors() -> No
     assert separated["ordering"] == ["PyEIDORS/DOLFINx", "NGSolve", "EIDORS"]
 
 
+def test_v722_shared_reference_sensitivity_detects_order_reversal() -> None:
+    candidates = {
+        "PyEIDORS/DOLFINx": np.asarray([[0.99, 1.0]], dtype=np.float64),
+        "NGSolve": np.asarray([[1.01, 1.0]], dtype=np.float64),
+        "EIDORS": np.asarray([[1.02, 1.0]], dtype=np.float64),
+    }
+    references = {
+        "previous_extrapolated": np.asarray([[0.98, 1.0]], dtype=np.float64),
+        "final_extrapolated": np.asarray([[1.0, 1.0]], dtype=np.float64),
+        "finest_raw": np.asarray([[1.015, 1.0]], dtype=np.float64),
+    }
+
+    result = shared_reference_sensitivity(candidates, references)
+
+    assert result["primary_reference"] == "final_extrapolated"
+    assert result["ordering_stable_across_references"] is False
+    assert result["best_solver_stable_across_references"] is False
+    assert set(result["reference_rankings"]) == set(references)
+    assert len(result["pairwise_solver_comparisons"]) == 3
+    json.dumps(result, allow_nan=False)
+    for comparison in result["pairwise_solver_comparisons"]:
+        assert comparison["symmetric_relative_voltage_separation"] > 0.0
+        assert comparison["squared_error_identity_closure_abs"] < 1.0e-15
+
+
 def test_v716_generalized_richardson_uses_measured_nonuniform_h() -> None:
     truth = np.asarray([[2.0, -1.0], [0.5, -1.5]], dtype=np.float64)
     coefficient = np.asarray([[0.3, -0.2], [0.1, 0.4]], dtype=np.float64)
@@ -153,9 +179,15 @@ def test_v716_generalized_richardson_uses_measured_nonuniform_h() -> None:
 
 def test_v715_report_contract_explains_reference_and_uncertainty() -> None:
     source = inspect.getsource(continuum_suite._write_markdown_report)
+    compare_source = inspect.getsource(continuum_suite.compare_suite)
 
     assert "Neumann-to-Dirichlet" in source
     assert "Richardson" in source
     assert "严格顺序成立" in source
+    assert "共享参考敏感性" in source
+    assert "离散误差" in source
+    assert "代数误差" in source
+    assert "finest_shared_reference_sensitivity" in compare_source
+    assert "accuracy_evidence_hierarchy" in compare_source
     assert "continuum_relative_l2" in continuum_suite.METRIC_FIELDS
     assert continuum_suite.METRIC_SCHEMA == "cem-continuum-accuracy-metrics-v1"
