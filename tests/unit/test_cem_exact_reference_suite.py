@@ -11,11 +11,14 @@ from sympy import Matrix, zeros
 from pyeidors.interop.geometry_exchange import build_mesh_from_exchange_mat
 
 from scripts.benchmarks.cem_exact_reference_suite import (
+    BASELINE_SETTING_ID,
     BOUNDARY_COUNT,
     CASES,
     FORMULATIONS,
     N_ELECTRODES,
     REFINEMENT_CASE_IDS,
+    SETTINGS,
+    _plot_factorial_suite,
     aggregate_metrics,
     aggregate_timing_metrics,
     assemble_exact_cem,
@@ -23,6 +26,8 @@ from scripts.benchmarks.cem_exact_reference_suite import (
     exact_accuracy_metrics,
     exact_circular_mesh,
     exact_current_patterns,
+    exact_basis_cache_clear,
+    exact_basis_cache_info,
     exact_refined_circular_mesh,
     float_nodes,
     prepare_case_fixture,
@@ -132,8 +137,11 @@ def test_v707_saved_mat_uses_one_based_electrode_connectivity(tmp_path: Path) ->
 
 
 def test_v703_exact_suite_case_matrix_and_integer_currents_are_complete() -> None:
-    assert [case.case_id for case in CASES] == [f"G{index}" for index in range(1, 9)]
-    assert REFINEMENT_CASE_IDS == ("G1", "G2", "G3", "G8")
+    assert [case.case_id for case in CASES] == [
+        f"G{index:02d}" for index in range(1, 49)
+    ]
+    assert len(SETTINGS) == 12
+    assert REFINEMENT_CASE_IDS == ("G01", "G13", "G25", "G37")
     refinement_cases = [case for case in CASES if case.case_id in REFINEMENT_CASE_IDS]
     assert [case.refinement_level_id for case in refinement_cases] == [
         "Q0",
@@ -154,11 +162,66 @@ def test_v703_exact_suite_case_matrix_and_integer_currents_are_complete() -> Non
         Fraction(1),
     }
     assert {case.drive_skip for case in CASES} == {1, 4}
+    expected_factorial = {
+        (level, sigma, impedance, drive)
+        for level in ("Q0", "Q1", "Q2", "Q3")
+        for sigma in (Fraction(1, 4), Fraction(1))
+        for impedance in (Fraction(1, 8), Fraction(1), Fraction(8))
+        for drive in (1, 4)
+    }
+    observed_factorial = {
+        (
+            case.refinement_level_id,
+            case.conductivity,
+            case.contact_impedance,
+            case.drive_skip,
+        )
+        for case in CASES
+    }
+    assert observed_factorial == expected_factorial
+    assert len(observed_factorial) == len(CASES)
+    assert all(case.setting_id == BASELINE_SETTING_ID for case in refinement_cases)
     for skip in (1, 4):
         currents = exact_current_patterns(skip)
         assert currents.dtype == np.float64
         assert np.array_equal(np.sum(currents, axis=0), np.zeros(N_ELECTRODES))
         assert set(np.unique(currents)) == {-1.0, 0.0, 1.0}
+
+
+def test_v724_exact_basis_cache_reuses_only_drive_independent_system() -> None:
+    adjacent = next(
+        case
+        for case in CASES
+        if case.refinement_level_id == "Q0"
+        and case.conductivity == Fraction(1, 4)
+        and case.contact_impedance == Fraction(1)
+        and case.drive_skip == 1
+    )
+    skip_four = next(
+        case
+        for case in CASES
+        if case.refinement_level_id == "Q0"
+        and case.conductivity == adjacent.conductivity
+        and case.contact_impedance == adjacent.contact_impedance
+        and case.drive_skip == 4
+    )
+    exact_basis_cache_clear()
+    try:
+        adjacent_reference = solve_exact_case(adjacent)
+        first = exact_basis_cache_info()
+        skip_reference = solve_exact_case(skip_four)
+        second = exact_basis_cache_info()
+
+        assert first.misses == 1
+        assert first.hits == 0
+        assert second.misses == 1
+        assert second.hits == 1
+        for reference in (adjacent_reference, skip_reference):
+            assert reference["exact_classic_residual_zero"] is True
+            assert reference["exact_robin_residual_zero"] is True
+            assert reference["exact_classic_robin_identical"] is True
+    finally:
+        exact_basis_cache_clear()
 
 
 def test_v717_nested_rational_refinement_preserves_exact_fixed_domain() -> None:
@@ -235,6 +298,76 @@ def test_v720_refinement_aggregation_keeps_grid_sequence_separate() -> None:
         assert summary["case_ids"] == list(REFINEMENT_CASE_IDS)
         assert summary["level_ids"] == ["Q0", "Q1", "Q2", "Q3"]
         assert summary["win_counts"]["PyEIDORS/DOLFINx"] == 4
+
+
+def test_v725_factorial_aggregation_is_balanced_by_mesh_and_setting() -> None:
+    metrics = []
+    solvers = ("PyEIDORS/DOLFINx", "EIDORS", "NGSolve")
+    for case in CASES:
+        for formulation in FORMULATIONS:
+            for rank, solver in enumerate(solvers, start=1):
+                metrics.append(
+                    {
+                        "case_id": case.case_id,
+                        "solver": solver,
+                        "formulation": formulation,
+                        "truth_relative_l2": rank * 1.0e-15,
+                    }
+                )
+
+    result = aggregate_metrics(metrics)["factorial_summary"]
+
+    assert result["full_factorial_complete"] is True
+    assert result["case_count"] == 48
+    assert result["mesh_level_ids"] == ["Q0", "Q1", "Q2", "Q3"]
+    assert result["setting_ids"] == [setting.setting_id for setting in SETTINGS]
+    for formulation in FORMULATIONS:
+        for level in result["mesh_level_ids"]:
+            group = result["by_mesh"][formulation][level]
+            assert group["case_count"] == 12
+            assert group["win_counts"]["PyEIDORS/DOLFINx"] == 12
+            assert group["per_solver"]["NGSolve"]["record_count"] == 12
+        for setting_id in result["setting_ids"]:
+            group = result["by_setting"][formulation][setting_id]
+            assert group["case_count"] == 4
+            assert group["win_counts"]["PyEIDORS/DOLFINx"] == 4
+            assert group["per_solver"]["EIDORS"]["record_count"] == 4
+
+
+def test_v725_factorial_plot_and_report_cover_complete_evidence(
+    tmp_path: Path,
+) -> None:
+    metrics = []
+    solvers = ("PyEIDORS/DOLFINx", "EIDORS", "NGSolve")
+    for case in CASES:
+        for formulation in FORMULATIONS:
+            for rank, solver in enumerate(solvers, start=1):
+                metrics.append(
+                    {
+                        "case_id": case.case_id,
+                        "solver": solver,
+                        "formulation": formulation,
+                        "truth_relative_l2": rank * 1.0e-15,
+                    }
+                )
+
+    plot_path = tmp_path / "factorial.png"
+    _plot_factorial_suite(metrics, plot_path)
+    report = (ROOT / "docs" / "benchmarks" / "cem_exact_accuracy_report.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert plot_path.stat().st_size > 0
+    for evidence in (
+        "48 个 case",
+        "288 条精度记录",
+        "`misses=24`",
+        "`hits=24`",
+        "S02/S08",
+        "288/288 条计时记录",
+        "cem_exact_factorial_heatmap.png",
+    ):
+        assert evidence in report
 
 
 def test_v704_truth_error_and_backward_residual_detect_a_perturbation() -> None:

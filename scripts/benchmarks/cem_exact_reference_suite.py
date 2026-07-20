@@ -8,6 +8,7 @@ import csv
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from fractions import Fraction
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -55,9 +56,9 @@ from scripts.benchmarks.compare_cem_formulations import (
 )
 
 
-SUITE_SCHEMA = "cem-exact-rational-suite-v2"
-GEOMETRY_SCHEMA = "cem-rational-fixed-32gon-refinement-v2"
-METRIC_SCHEMA = "cem-exact-accuracy-metrics-v2"
+SUITE_SCHEMA = "cem-exact-rational-suite-v3"
+GEOMETRY_SCHEMA = "cem-rational-fixed-32gon-refinement-v3"
+METRIC_SCHEMA = "cem-exact-accuracy-metrics-v3"
 TIMING_REPEATS = 11
 TIMING_OPERATIONS_PER_SAMPLE = DEFAULT_OPERATIONS_PER_SAMPLE
 N_ELECTRODES = 16
@@ -68,9 +69,13 @@ ELECTRODE_TANGENT_DIVISOR = 4
 FORMULATIONS = ("classic", "robin_transconductance")
 CSV_FIELDS = (
     "case_id",
+    "setting_id",
     "refinement_level_id",
     "edge_subdivisions",
     "radial_layers",
+    "conductivity_exact",
+    "contact_impedance_exact",
+    "drive_label",
     "nodes",
     "cells",
     "solver",
@@ -104,6 +109,7 @@ TIMING_CSV_FIELDS = (
 class ExactCase:
     case_id: str
     label: str
+    setting_id: str
     refinement_level_id: str
     edge_subdivisions: int
     radial_layers: int
@@ -135,17 +141,75 @@ class ExactCase:
         return self.radial_layers - 1
 
 
-CASES = (
-    ExactCase("G1", "q0_baseline", "Q0", 1, 1, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G2", "q1_baseline", "Q1", 1, 2, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G3", "q2_baseline", "Q2", 2, 2, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G4", "q1_low_z", "Q1", 1, 2, 1, 4, 1, 8, 1, "adjacent"),
-    ExactCase("G5", "q1_high_z", "Q1", 1, 2, 1, 4, 8, 1, 1, "adjacent"),
-    ExactCase("G6", "q1_high_sigma", "Q1", 1, 2, 1, 1, 1, 1, 1, "adjacent"),
-    ExactCase("G7", "q1_skip4_drive", "Q1", 1, 2, 1, 4, 1, 1, 4, "skip-4"),
-    ExactCase("G8", "q3_baseline", "Q3", 2, 4, 1, 4, 1, 1, 1, "adjacent"),
+@dataclass(frozen=True)
+class ExactMeshLevel:
+    level_id: str
+    edge_subdivisions: int
+    radial_layers: int
+
+
+@dataclass(frozen=True)
+class ExactSetting:
+    setting_id: str
+    label: str
+    conductivity_numerator: int
+    conductivity_denominator: int
+    impedance_numerator: int
+    impedance_denominator: int
+    drive_skip: int
+    drive_label: str
+
+    @property
+    def conductivity(self) -> Fraction:
+        return Fraction(self.conductivity_numerator, self.conductivity_denominator)
+
+    @property
+    def contact_impedance(self) -> Fraction:
+        return Fraction(self.impedance_numerator, self.impedance_denominator)
+
+
+MESH_LEVELS = (
+    ExactMeshLevel("Q0", 1, 1),
+    ExactMeshLevel("Q1", 1, 2),
+    ExactMeshLevel("Q2", 2, 2),
+    ExactMeshLevel("Q3", 2, 4),
 )
-REFINEMENT_CASE_IDS = ("G1", "G2", "G3", "G8")
+SETTINGS = (
+    ExactSetting("S01", "baseline_adjacent", 1, 4, 1, 1, 1, "adjacent"),
+    ExactSetting("S02", "low_z_adjacent", 1, 4, 1, 8, 1, "adjacent"),
+    ExactSetting("S03", "high_z_adjacent", 1, 4, 8, 1, 1, "adjacent"),
+    ExactSetting("S04", "high_sigma_adjacent", 1, 1, 1, 1, 1, "adjacent"),
+    ExactSetting("S05", "high_sigma_low_z_adjacent", 1, 1, 1, 8, 1, "adjacent"),
+    ExactSetting("S06", "high_sigma_high_z_adjacent", 1, 1, 8, 1, 1, "adjacent"),
+    ExactSetting("S07", "baseline_skip4", 1, 4, 1, 1, 4, "skip-4"),
+    ExactSetting("S08", "low_z_skip4", 1, 4, 1, 8, 4, "skip-4"),
+    ExactSetting("S09", "high_z_skip4", 1, 4, 8, 1, 4, "skip-4"),
+    ExactSetting("S10", "high_sigma_skip4", 1, 1, 1, 1, 4, "skip-4"),
+    ExactSetting("S11", "high_sigma_low_z_skip4", 1, 1, 1, 8, 4, "skip-4"),
+    ExactSetting("S12", "high_sigma_high_z_skip4", 1, 1, 8, 1, 4, "skip-4"),
+)
+BASELINE_SETTING_ID = "S01"
+CASES = tuple(
+    ExactCase(
+        case_id=f"G{mesh_index * len(SETTINGS) + setting_index + 1:02d}",
+        label=f"{mesh.level_id.lower()}_{setting.label}",
+        setting_id=setting.setting_id,
+        refinement_level_id=mesh.level_id,
+        edge_subdivisions=mesh.edge_subdivisions,
+        radial_layers=mesh.radial_layers,
+        conductivity_numerator=setting.conductivity_numerator,
+        conductivity_denominator=setting.conductivity_denominator,
+        impedance_numerator=setting.impedance_numerator,
+        impedance_denominator=setting.impedance_denominator,
+        drive_skip=setting.drive_skip,
+        drive_label=setting.drive_label,
+    )
+    for mesh_index, mesh in enumerate(MESH_LEVELS)
+    for setting_index, setting in enumerate(SETTINGS)
+)
+REFINEMENT_CASE_IDS = tuple(
+    case.case_id for case in CASES if case.setting_id == BASELINE_SETTING_ID
+)
 
 
 def _first_quadrant_centers() -> tuple[tuple[int, int], ...]:
@@ -433,6 +497,12 @@ def _fraction_string(value: Fraction) -> str:
     return f"{value.numerator}/{value.denominator}"
 
 
+def _display_fraction(value: Fraction) -> str:
+    if value.denominator == 1:
+        return str(value.numerator)
+    return _fraction_string(value)
+
+
 def _case_directory(output_dir: Path, case: ExactCase) -> Path:
     return output_dir / "cases" / f"{case.case_id}_{case.label}"
 
@@ -469,6 +539,7 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
         "suite_schema": SUITE_SCHEMA,
         "geometry_schema": GEOMETRY_SCHEMA,
         "case_id": case.case_id,
+        "setting_id": case.setting_id,
         "ring_count": case.ring_count,
         "refinement_level_id": case.refinement_level_id,
         "edge_subdivisions": case.edge_subdivisions,
@@ -483,6 +554,7 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
         "geometry_schema": GEOMETRY_SCHEMA,
         "case": asdict(case),
         "case_id": case.case_id,
+        "setting_id": case.setting_id,
         "label": case.label,
         "ring_count": case.ring_count,
         "refinement_level_id": case.refinement_level_id,
@@ -721,18 +793,32 @@ def _rational_zero_sum_basis() -> Matrix:
     return Matrix(basis)
 
 
-def solve_exact_case(case: ExactCase) -> dict[str, Any]:
-    """Solve both exact classic and exact Robin systems over QQ."""
+@lru_cache(maxsize=None)
+def _solve_exact_basis_system(
+    edge_subdivisions: int,
+    radial_layers: int,
+    conductivity_numerator: int,
+    conductivity_denominator: int,
+    impedance_numerator: int,
+    impedance_denominator: int,
+) -> dict[str, Any]:
+    """Solve one drive-independent exact CEM system on a zero-sum basis."""
 
-    nodes, cells, edges, _, _ = exact_case_mesh(case)
+    nodes, cells, edges, _, _ = exact_refined_circular_mesh(
+        edge_subdivisions=edge_subdivisions,
+        radial_layers=radial_layers,
+    )
     a_r, coupling, electrode_matrix = assemble_exact_cem(
         nodes,
         cells,
         edges,
-        conductivity=case.conductivity,
-        contact_impedance=case.contact_impedance,
+        conductivity=Fraction(conductivity_numerator, conductivity_denominator),
+        contact_impedance=Fraction(
+            impedance_numerator,
+            impedance_denominator,
+        ),
     )
-    currents = _exact_currents_matrix(exact_current_patterns(case.drive_skip))
+    basis = _rational_zero_sum_basis()
     node_count = len(nodes)
     full_size = node_count + N_ELECTRODES + 1
     full_matrix = SparseMatrix.zeros(full_size, full_size)
@@ -746,13 +832,87 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
     for electrode in range(N_ELECTRODES):
         full_matrix[node_count + electrode, full_size - 1] = 1
         full_matrix[full_size - 1, node_count + electrode] = 1
+    basis_rhs = SparseMatrix.zeros(full_size, N_ELECTRODES - 1)
+    basis_rhs[node_count : node_count + N_ELECTRODES, :] = basis
+    classic_solution_basis = (
+        full_matrix.to_DM()
+        .convert_to(QQ)
+        .lu_solve(basis_rhs.to_DM().convert_to(QQ))
+        .to_Matrix()
+    )
+    if any(
+        value != 0
+        for value in Matrix(full_matrix) * classic_solution_basis - Matrix(basis_rhs)
+    ):
+        raise RuntimeError("exact classic basis residual is not zero")
+    classic_voltage_basis = classic_solution_basis[
+        node_count : node_count + N_ELECTRODES,
+        :,
+    ]
+
+    response = (
+        a_r.to_DM().convert_to(QQ).lu_solve(coupling.to_DM().convert_to(QQ)).to_Matrix()
+    )
+    schur = electrode_matrix - coupling.T * response
+    reduced_map = basis.T * schur * basis
+    reduced_rhs_basis = basis.T * basis
+    robin_coefficient_basis = (
+        reduced_map.to_DM()
+        .convert_to(QQ)
+        .lu_solve(reduced_rhs_basis.to_DM().convert_to(QQ))
+        .to_Matrix()
+    )
+    if any(
+        value != 0
+        for value in reduced_map * robin_coefficient_basis - reduced_rhs_basis
+    ):
+        raise RuntimeError("exact Robin basis residual is not zero")
+    robin_voltage_basis = basis * robin_coefficient_basis
+    if classic_voltage_basis != robin_voltage_basis:
+        raise RuntimeError("exact Classic and Robin basis voltages differ")
+    return {
+        "basis": basis,
+        "full_matrix": Matrix(full_matrix),
+        "node_count": node_count,
+        "classic_solution_basis": classic_solution_basis,
+        "robin_coefficient_basis": robin_coefficient_basis,
+        "reduced_map": reduced_map,
+    }
+
+
+def exact_basis_cache_clear() -> None:
+    """Clear the exact drive-independent basis cache."""
+
+    _solve_exact_basis_system.cache_clear()
+
+
+def exact_basis_cache_info():
+    """Return hit/miss statistics for the exact basis cache."""
+
+    return _solve_exact_basis_system.cache_info()
+
+
+def solve_exact_case(case: ExactCase) -> dict[str, Any]:
+    """Solve both exact classic and exact Robin systems over QQ."""
+
+    cache_key = (
+        case.edge_subdivisions,
+        case.radial_layers,
+        case.conductivity_numerator,
+        case.conductivity_denominator,
+        case.impedance_numerator,
+        case.impedance_denominator,
+    )
+    system = _solve_exact_basis_system(*cache_key)
+    basis = system["basis"]
+    currents = _exact_currents_matrix(exact_current_patterns(case.drive_skip))
+    current_coordinates = currents[: N_ELECTRODES - 1, :]
+    node_count = int(system["node_count"])
+    full_size = node_count + N_ELECTRODES + 1
     rhs = SparseMatrix.zeros(full_size, currents.cols)
     rhs[node_count : node_count + N_ELECTRODES, :] = currents
-
-    full_domain_matrix = full_matrix.to_DM().convert_to(QQ)
-    rhs_domain_matrix = rhs.to_DM().convert_to(QQ)
-    classic_solution = full_domain_matrix.lu_solve(rhs_domain_matrix).to_Matrix()
-    classic_residual = Matrix(full_matrix) * classic_solution - Matrix(rhs)
+    classic_solution = system["classic_solution_basis"] * current_coordinates
+    classic_residual = system["full_matrix"] * classic_solution - Matrix(rhs)
     if any(value != 0 for value in classic_residual):
         raise RuntimeError(f"{case.case_id} exact classic residual is not zero")
     classic_voltage = classic_solution[
@@ -760,16 +920,9 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
         :,
     ]
 
-    a_r_domain_matrix = a_r.to_DM().convert_to(QQ)
-    coupling_domain_matrix = coupling.to_DM().convert_to(QQ)
-    response = a_r_domain_matrix.lu_solve(coupling_domain_matrix).to_Matrix()
-    schur = electrode_matrix - coupling.T * response
-    basis = _rational_zero_sum_basis()
-    reduced_map = basis.T * schur * basis
+    reduced_map = system["reduced_map"]
     reduced_rhs = basis.T * currents
-    reduced_domain_matrix = reduced_map.to_DM().convert_to(QQ)
-    reduced_rhs_domain_matrix = reduced_rhs.to_DM().convert_to(QQ)
-    coefficients = reduced_domain_matrix.lu_solve(reduced_rhs_domain_matrix).to_Matrix()
+    coefficients = system["robin_coefficient_basis"] * current_coordinates
     robin_voltage = basis * coefficients
     robin_residual = reduced_map * coefficients - reduced_rhs
     if any(value != 0 for value in robin_residual):
@@ -800,6 +953,8 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
         "exact_classic_robin_identical": True,
         "exact_linear_solver": "DomainMatrix.lu_solve",
         "exact_domain": "QQ",
+        "exact_basis_cache_key": list(cache_key),
+        "exact_basis_rhs_count": N_ELECTRODES - 1,
         "truth_sha256": truth_digest,
         "truth_fraction_strings": exact_strings,
     }
@@ -1101,11 +1256,84 @@ def aggregate_metrics(metrics: list[dict[str, Any]]) -> dict[str, Any]:
             and all(order == level_orders[0] for order in level_orders[1:]),
             "per_solver": per_solver,
         }
+
+    def grouped_summary(
+        attribute: str,
+        group_values: tuple[str, ...],
+    ) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {
+            formulation: {} for formulation in FORMULATIONS
+        }
+        for formulation in FORMULATIONS:
+            for group_value in group_values:
+                group_cases = [
+                    case
+                    for case in observed_cases
+                    if str(getattr(case, attribute)) == group_value
+                ]
+                if not group_cases:
+                    continue
+                group_case_ids = {case.case_id for case in group_cases}
+                group_win_counts = {solver: 0 for solver in solvers}
+                for case in group_cases:
+                    winner = rankings[f"{case.case_id}:{formulation}"][0]["solver"]
+                    group_win_counts[str(winner)] += 1
+                group_solver_summary: dict[str, Any] = {}
+                for solver in solvers:
+                    errors = np.asarray(
+                        [
+                            item["truth_relative_l2"]
+                            for item in metrics
+                            if item["case_id"] in group_case_ids
+                            and item["solver"] == solver
+                            and item["formulation"] == formulation
+                        ],
+                        dtype=np.float64,
+                    )
+                    group_solver_summary[solver] = {
+                        "record_count": int(errors.size),
+                        "geometric_mean_truth_relative_l2": float(
+                            np.exp(np.mean(np.log(errors)))
+                        ),
+                        "median_truth_relative_l2": float(np.median(errors)),
+                        "worst_truth_relative_l2": float(np.max(errors)),
+                    }
+                grouped[formulation][group_value] = {
+                    "case_count": len(group_cases),
+                    "case_ids": [case.case_id for case in group_cases],
+                    "win_counts": group_win_counts,
+                    "per_solver": group_solver_summary,
+                }
+        return grouped
+
+    mesh_level_ids = tuple(mesh.level_id for mesh in MESH_LEVELS)
+    setting_ids = tuple(setting.setting_id for setting in SETTINGS)
+    expected_record_keys = {
+        (case.case_id, solver, formulation)
+        for case in CASES
+        for solver in solvers
+        for formulation in FORMULATIONS
+    }
+    observed_record_keys = {
+        (str(item["case_id"]), str(item["solver"]), str(item["formulation"]))
+        for item in metrics
+    }
+    factorial_summary = {
+        "full_factorial_complete": observed_case_ids == {case.case_id for case in CASES}
+        and observed_record_keys == expected_record_keys
+        and len(metrics) == len(expected_record_keys),
+        "case_count": len(observed_cases),
+        "mesh_level_ids": list(mesh_level_ids),
+        "setting_ids": list(setting_ids),
+        "by_mesh": grouped_summary("refinement_level_id", mesh_level_ids),
+        "by_setting": grouped_summary("setting_id", setting_ids),
+    }
     return {
         "rankings": rankings,
         "solver_summary": solver_summary,
         "universal_ordering": universal_ordering,
         "refinement_summary": refinement_summary,
+        "factorial_summary": factorial_summary,
     }
 
 
@@ -1346,7 +1574,109 @@ def _plot_suite(metrics: list[dict[str, Any]], path: Path) -> None:
     plt.close(figure)
 
 
+def _plot_factorial_suite(metrics: list[dict[str, Any]], path: Path) -> None:
+    """Plot every mesh-setting cell relative to the per-cell best solver."""
+
+    configure_fonts()
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["Times New Roman"],
+            "mathtext.fontset": "stix",
+        }
+    )
+    solvers = sorted({str(item["solver"]) for item in metrics})
+    if len(solvers) != 3:
+        raise ValueError("factorial heatmap requires exactly three solvers")
+    mesh_level_ids = [mesh.level_id for mesh in MESH_LEVELS]
+    setting_ids = [setting.setting_id for setting in SETTINGS]
+    case_lookup = {(case.setting_id, case.refinement_level_id): case for case in CASES}
+    metric_lookup = {
+        (str(item["case_id"]), str(item["solver"]), str(item["formulation"])): item
+        for item in metrics
+    }
+    best_error = {
+        (case.case_id, formulation): min(
+            float(
+                metric_lookup[(case.case_id, solver, formulation)]["truth_relative_l2"]
+            )
+            for solver in solvers
+        )
+        for case in CASES
+        for formulation in FORMULATIONS
+    }
+    matrices: dict[tuple[str, str], np.ndarray] = {}
+    for formulation in FORMULATIONS:
+        for solver in solvers:
+            values = np.empty((len(setting_ids), len(mesh_level_ids)))
+            for row, setting_id in enumerate(setting_ids):
+                for column, level_id in enumerate(mesh_level_ids):
+                    case = case_lookup[(setting_id, level_id)]
+                    error = float(
+                        metric_lookup[(case.case_id, solver, formulation)][
+                            "truth_relative_l2"
+                        ]
+                    )
+                    values[row, column] = math.log10(
+                        error / best_error[(case.case_id, formulation)]
+                    )
+            matrices[(formulation, solver)] = values
+    maximum = max(float(np.max(values)) for values in matrices.values())
+    figure, axes = plt.subplots(
+        len(FORMULATIONS),
+        len(solvers),
+        figsize=(13.5, 10.5),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    image = None
+    for row, formulation in enumerate(FORMULATIONS):
+        for column, solver in enumerate(solvers):
+            axis = axes[row, column]
+            image = axis.imshow(
+                matrices[(formulation, solver)],
+                aspect="auto",
+                interpolation="nearest",
+                cmap="Blues",
+                vmin=0.0,
+                vmax=maximum,
+            )
+            axis.set_xticks(range(len(mesh_level_ids)), mesh_level_ids)
+            if column == 0:
+                axis.set_yticks(
+                    range(len(SETTINGS)),
+                    [
+                        (
+                            f"{setting.setting_id}  sigma="
+                            f"{_display_fraction(setting.conductivity)}, z="
+                            f"{_display_fraction(setting.contact_impedance)}, "
+                            f"{setting.drive_label}"
+                        )
+                        for setting in SETTINGS
+                    ],
+                    fontsize=7,
+                )
+            else:
+                axis.set_yticks(range(len(SETTINGS)), [])
+            display_name = "Classic" if formulation == "classic" else "Robin"
+            axis.set_title(f"{display_name} CEM — {solver}", fontsize=10)
+            axis.set_xlabel("Rational mesh level")
+            for label in axis.get_xticklabels() + axis.get_yticklabels():
+                label.set_fontname("Times New Roman")
+    if image is None:
+        raise RuntimeError("factorial heatmap has no data")
+    colorbar = figure.colorbar(image, ax=axes, shrink=0.82, pad=0.02)
+    colorbar.set_label("log10(relative error / best error in the same case)")
+    figure.suptitle(
+        "Exact rational CEM accuracy across the balanced 4 x 12 factorial",
+        fontsize=14,
+    )
+    figure.savefig(path, dpi=220)
+    plt.close(figure)
+
+
 def compare_suite(output_dir: Path) -> dict[str, Any]:
+    exact_basis_cache_clear()
     manifest = _load_json(output_dir / "suite_manifest.json")
     fixtures = {item["case_id"]: item for item in manifest["cases"]}
     metrics: list[dict[str, Any]] = []
@@ -1371,6 +1701,8 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
             "exact_classic_robin_identical": True,
             "exact_linear_solver": reference["exact_linear_solver"],
             "exact_domain": reference["exact_domain"],
+            "exact_basis_cache_key": reference["exact_basis_cache_key"],
+            "exact_basis_rhs_count": reference["exact_basis_rhs_count"],
             "electrode_voltage_fractions": reference["truth_fraction_strings"],
         }
         for report in reports:
@@ -1390,9 +1722,15 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
                     {
                         "case_id": case.case_id,
                         "case_label": case.label,
+                        "setting_id": case.setting_id,
                         "refinement_level_id": case.refinement_level_id,
                         "edge_subdivisions": case.edge_subdivisions,
                         "radial_layers": case.radial_layers,
+                        "conductivity_exact": _fraction_string(case.conductivity),
+                        "contact_impedance_exact": _fraction_string(
+                            case.contact_impedance
+                        ),
+                        "drive_label": case.drive_label,
                         "nodes": int(fixture["nodes"]),
                         "cells": int(fixture["cells"]),
                         "solver": report["solver"],
@@ -1407,9 +1745,17 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
     csv_path = output_dir / "cem_exact_accuracy_metrics.csv"
     timing_csv_path = output_dir / "cem_exact_timing_metrics.csv"
     plot_path = output_dir / "cem_exact_accuracy.png"
+    factorial_plot_path = output_dir / "cem_exact_factorial_heatmap.png"
     _write_metrics_csv(csv_path, metrics)
     _write_timing_csv(timing_csv_path, timing_records)
     _plot_suite(metrics, plot_path)
+    _plot_factorial_suite(metrics, factorial_plot_path)
+    cache_info = exact_basis_cache_info()
+    expected_cache_misses = len(MESH_LEVELS) * 2 * 3
+    if cache_info.misses != expected_cache_misses or cache_info.hits != len(CASES) // 2:
+        raise RuntimeError(
+            "exact basis cache did not reuse exactly one solve across the two drives"
+        )
     report = {
         "suite_schema": SUITE_SCHEMA,
         "metric_schema": METRIC_SCHEMA,
@@ -1424,6 +1770,20 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
             "uses_any_fem_solver_matrix": False,
             "ranking_requires_zero_exact_residual": True,
             "ranking_requires_exact_classic_robin_identity": True,
+            "basis_cache": {
+                "key_fields": [
+                    "edge_subdivisions",
+                    "radial_layers",
+                    "conductivity",
+                    "contact_impedance",
+                ],
+                "drive_in_key": False,
+                "basis_rhs_count": N_ELECTRODES - 1,
+                "hits": cache_info.hits,
+                "misses": cache_info.misses,
+                "maxsize": cache_info.maxsize,
+                "currsize": cache_info.currsize,
+            },
         },
         "cases": [asdict(case) for case in CASES],
         "refinement_case_ids": list(REFINEMENT_CASE_IDS),
@@ -1451,6 +1811,7 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
             "csv": csv_path.name,
             "timing_csv": timing_csv_path.name,
             "plot": plot_path.name,
+            "factorial_plot": factorial_plot_path.name,
         },
     }
     json.dumps(report, allow_nan=False)
