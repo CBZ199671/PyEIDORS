@@ -15,12 +15,15 @@ from scripts.benchmarks.cem_exact_reference_suite import (
     CASES,
     FORMULATIONS,
     N_ELECTRODES,
+    REFINEMENT_CASE_IDS,
     aggregate_metrics,
     aggregate_timing_metrics,
     assemble_exact_cem,
+    exact_case_mesh,
     exact_accuracy_metrics,
     exact_circular_mesh,
     exact_current_patterns,
+    exact_refined_circular_mesh,
     float_nodes,
     prepare_case_fixture,
     solve_exact_case,
@@ -98,6 +101,8 @@ def test_v702_exact_cem_blocks_and_solves_are_rational_identities() -> None:
     assert reference["exact_classic_residual_zero"] is True
     assert reference["exact_robin_residual_zero"] is True
     assert reference["exact_classic_robin_identical"] is True
+    assert reference["exact_linear_solver"] == "DomainMatrix.lu_solve"
+    assert reference["exact_domain"] == "QQ"
     assert all(
         sum(reference["voltage"][row, column] for row in range(N_ELECTRODES)) == 0
         for column in range(N_ELECTRODES)
@@ -127,8 +132,18 @@ def test_v707_saved_mat_uses_one_based_electrode_connectivity(tmp_path: Path) ->
 
 
 def test_v703_exact_suite_case_matrix_and_integer_currents_are_complete() -> None:
-    assert [case.case_id for case in CASES] == [f"G{index}" for index in range(1, 8)]
-    assert {case.ring_count for case in CASES} == {0, 1, 2}
+    assert [case.case_id for case in CASES] == [f"G{index}" for index in range(1, 9)]
+    assert REFINEMENT_CASE_IDS == ("G1", "G2", "G3", "G8")
+    refinement_cases = [case for case in CASES if case.case_id in REFINEMENT_CASE_IDS]
+    assert [case.refinement_level_id for case in refinement_cases] == [
+        "Q0",
+        "Q1",
+        "Q2",
+        "Q3",
+    ]
+    assert {
+        (case.edge_subdivisions, case.radial_layers) for case in refinement_cases
+    } == {(1, 1), (1, 2), (2, 2), (2, 4)}
     assert {case.contact_impedance for case in CASES} == {
         Fraction(1, 8),
         Fraction(1),
@@ -144,6 +159,82 @@ def test_v703_exact_suite_case_matrix_and_integer_currents_are_complete() -> Non
         assert currents.dtype == np.float64
         assert np.array_equal(np.sum(currents, axis=0), np.zeros(N_ELECTRODES))
         assert set(np.unique(currents)) == {-1.0, 0.0, 1.0}
+
+
+def test_v717_nested_rational_refinement_preserves_exact_fixed_domain() -> None:
+    expected = {
+        "Q0": (1, 1, 33, 32),
+        "Q1": (1, 2, 65, 96),
+        "Q2": (2, 2, 129, 192),
+        "Q3": (2, 4, 257, 448),
+    }
+    node_sets: list[set[tuple[Fraction, Fraction]]] = []
+    for level_id, (
+        edge_subdivisions,
+        radial_layers,
+        nodes_count,
+        cells_count,
+    ) in expected.items():
+        nodes, cells, edges, electrode_nodes, electrode_counts = (
+            exact_refined_circular_mesh(
+                edge_subdivisions=edge_subdivisions,
+                radial_layers=radial_layers,
+            )
+        )
+        assert len(nodes) == nodes_count
+        assert cells.shape == (cells_count, 3)
+        assert edges.shape == (BOUNDARY_COUNT * edge_subdivisions, 3)
+        assert electrode_nodes.shape == (
+            N_ELECTRODES,
+            edge_subdivisions + 1,
+        )
+        assert np.array_equal(
+            electrode_counts,
+            np.full(N_ELECTRODES, edge_subdivisions + 1, dtype=np.int64),
+        )
+        assert np.count_nonzero(edges[:, 2]) == N_ELECTRODES * edge_subdivisions
+        assert all(
+            coordinate.denominator & (coordinate.denominator - 1) == 0
+            for point in nodes
+            for coordinate in point
+        )
+        assert float_nodes(nodes).dtype == np.float64
+        node_sets.append(set(nodes))
+        case = next(item for item in CASES if item.refinement_level_id == level_id)
+        assert exact_case_mesh(case)[0] == nodes
+
+    assert all(
+        coarse <= fine
+        for coarse, fine in zip(node_sets[:-1], node_sets[1:], strict=True)
+    )
+
+
+def test_v720_refinement_aggregation_keeps_grid_sequence_separate() -> None:
+    metrics = []
+    solvers = ("PyEIDORS/DOLFINx", "EIDORS", "NGSolve")
+    case_lookup = {case.case_id: case for case in CASES}
+    for case_id in REFINEMENT_CASE_IDS:
+        case = case_lookup[case_id]
+        for formulation in FORMULATIONS:
+            for rank, solver in enumerate(solvers, start=1):
+                metrics.append(
+                    {
+                        "case_id": case_id,
+                        "refinement_level_id": case.refinement_level_id,
+                        "nodes": 10 * case.radial_layers * case.edge_subdivisions,
+                        "cells": 20 * case.radial_layers * case.edge_subdivisions,
+                        "solver": solver,
+                        "formulation": formulation,
+                        "truth_relative_l2": rank * 1.0e-15,
+                    }
+                )
+
+    result = aggregate_metrics(metrics)
+    for formulation in FORMULATIONS:
+        summary = result["refinement_summary"][formulation]
+        assert summary["case_ids"] == list(REFINEMENT_CASE_IDS)
+        assert summary["level_ids"] == ["Q0", "Q1", "Q2", "Q3"]
+        assert summary["win_counts"]["PyEIDORS/DOLFINx"] == 4
 
 
 def test_v704_truth_error_and_backward_residual_detect_a_perturbation() -> None:
@@ -196,6 +287,19 @@ def test_v703_external_runners_export_exact_suite_identity_fields() -> None:
         assert "suite_schema" in source
         assert "case_id" in source
         assert "drive_skip" in source
+
+    ngsolve_suite_source = (
+        ROOT / "scripts" / "benchmarks" / "ngsolve_cem_exact_suite.py"
+    ).read_text(encoding="utf-8")
+    matlab_suite_source = (
+        ROOT / "compare_with_Eidors" / "run_cem_exact_suite.m"
+    ).read_text(encoding="utf-8")
+    assert 'cases = manifest["cases"]' in ngsolve_suite_source
+    assert "for fixture in cases" in ngsolve_suite_source
+    assert "run_case(" in ngsolve_suite_source
+    assert "fixtures = manifest.cases" in matlab_suite_source
+    assert "for index = 1:numel(fixtures)" in matlab_suite_source
+    assert "compare_cem_formulations.m" in matlab_suite_source
 
 
 def test_v688_timing_aggregation_keeps_phases_and_ratio_direction_explicit() -> None:

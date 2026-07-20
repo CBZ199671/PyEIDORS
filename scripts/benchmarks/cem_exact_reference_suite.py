@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpmath import mp
 import numpy as np
-from sympy import Matrix, Rational, SparseMatrix
+from sympy import Matrix, QQ, Rational, SparseMatrix
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -55,9 +55,9 @@ from scripts.benchmarks.compare_cem_formulations import (
 )
 
 
-SUITE_SCHEMA = "cem-exact-rational-suite-v1"
-GEOMETRY_SCHEMA = "cem-rational-cyclic-32gon-v1"
-METRIC_SCHEMA = "cem-exact-accuracy-metrics-v1"
+SUITE_SCHEMA = "cem-exact-rational-suite-v2"
+GEOMETRY_SCHEMA = "cem-rational-fixed-32gon-refinement-v2"
+METRIC_SCHEMA = "cem-exact-accuracy-metrics-v2"
 TIMING_REPEATS = 11
 TIMING_OPERATIONS_PER_SAMPLE = DEFAULT_OPERATIONS_PER_SAMPLE
 N_ELECTRODES = 16
@@ -68,6 +68,11 @@ ELECTRODE_TANGENT_DIVISOR = 4
 FORMULATIONS = ("classic", "robin_transconductance")
 CSV_FIELDS = (
     "case_id",
+    "refinement_level_id",
+    "edge_subdivisions",
+    "radial_layers",
+    "nodes",
+    "cells",
     "solver",
     "formulation",
     "truth_relative_l2",
@@ -99,7 +104,9 @@ TIMING_CSV_FIELDS = (
 class ExactCase:
     case_id: str
     label: str
-    ring_count: int
+    refinement_level_id: str
+    edge_subdivisions: int
+    radial_layers: int
     conductivity_numerator: int
     conductivity_denominator: int
     impedance_numerator: int
@@ -121,16 +128,24 @@ class ExactCase:
             self.impedance_denominator,
         )
 
+    @property
+    def ring_count(self) -> int:
+        """Return internal ring count for backward-compatible metadata."""
+
+        return self.radial_layers - 1
+
 
 CASES = (
-    ExactCase("G1", "rings0_baseline", 0, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G2", "rings1_baseline", 1, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G3", "rings2_baseline", 2, 1, 4, 1, 1, 1, "adjacent"),
-    ExactCase("G4", "rings1_low_z", 1, 1, 4, 1, 8, 1, "adjacent"),
-    ExactCase("G5", "rings1_high_z", 1, 1, 4, 8, 1, 1, "adjacent"),
-    ExactCase("G6", "rings1_high_sigma", 1, 1, 1, 1, 1, 1, "adjacent"),
-    ExactCase("G7", "rings1_skip4_drive", 1, 1, 4, 1, 1, 4, "skip-4"),
+    ExactCase("G1", "q0_baseline", "Q0", 1, 1, 1, 4, 1, 1, 1, "adjacent"),
+    ExactCase("G2", "q1_baseline", "Q1", 1, 2, 1, 4, 1, 1, 1, "adjacent"),
+    ExactCase("G3", "q2_baseline", "Q2", 2, 2, 1, 4, 1, 1, 1, "adjacent"),
+    ExactCase("G4", "q1_low_z", "Q1", 1, 2, 1, 4, 1, 8, 1, "adjacent"),
+    ExactCase("G5", "q1_high_z", "Q1", 1, 2, 1, 4, 8, 1, 1, "adjacent"),
+    ExactCase("G6", "q1_high_sigma", "Q1", 1, 2, 1, 1, 1, 1, 1, "adjacent"),
+    ExactCase("G7", "q1_skip4_drive", "Q1", 1, 2, 1, 4, 1, 1, 4, "skip-4"),
+    ExactCase("G8", "q3_baseline", "Q3", 2, 4, 1, 4, 1, 1, 1, "adjacent"),
 )
+REFINEMENT_CASE_IDS = ("G1", "G2", "G3", "G8")
 
 
 def _first_quadrant_centers() -> tuple[tuple[int, int], ...]:
@@ -261,6 +276,132 @@ def exact_circular_mesh(
     return tuple(nodes), cell_array, edges, electrode_nodes, electrode_counts
 
 
+def _positive_power_of_two(value: int, *, name: str) -> int:
+    count = int(value)
+    if count <= 0 or count & (count - 1):
+        raise ValueError(f"{name} must be a positive power of two")
+    return count
+
+
+def exact_refined_circular_mesh(
+    *,
+    edge_subdivisions: int,
+    radial_layers: int,
+) -> tuple[
+    tuple[tuple[Fraction, Fraction], ...],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Refine one fixed rational 32-gon with nested dyadic P1 triangles."""
+
+    subdivisions = _positive_power_of_two(
+        edge_subdivisions,
+        name="edge_subdivisions",
+    )
+    layers = _positive_power_of_two(radial_layers, name="radial_layers")
+    base_boundary = exact_boundary_nodes()
+    boundary: list[tuple[Fraction, Fraction]] = []
+    boundary_labels: list[int] = []
+    for base_index, start in enumerate(base_boundary):
+        stop = base_boundary[(base_index + 1) % BOUNDARY_COUNT]
+        for sub_index in range(subdivisions):
+            fraction = Fraction(sub_index, subdivisions)
+            boundary.append(
+                (
+                    (1 - fraction) * start[0] + fraction * stop[0],
+                    (1 - fraction) * start[1] + fraction * stop[1],
+                )
+            )
+            boundary_labels.append(base_index // 2 + 1 if base_index % 2 == 0 else 0)
+
+    refined_boundary_count = len(boundary)
+    nodes: list[tuple[Fraction, Fraction]] = [(Fraction(0), Fraction(0))]
+    for layer in range(1, layers + 1):
+        radius = Fraction(layer, layers)
+        nodes.extend((radius * x, radius * y) for x, y in boundary)
+
+    cells: list[tuple[int, int, int]] = []
+    for index in range(refined_boundary_count):
+        next_index = (index + 1) % refined_boundary_count
+        cells.append((0, 1 + index, 1 + next_index))
+    for inner_ring in range(layers - 1):
+        inner_offset = 1 + inner_ring * refined_boundary_count
+        outer_offset = inner_offset + refined_boundary_count
+        for index in range(refined_boundary_count):
+            next_index = (index + 1) % refined_boundary_count
+            cells.append(
+                (
+                    inner_offset + index,
+                    outer_offset + index,
+                    outer_offset + next_index,
+                )
+            )
+            cells.append(
+                (
+                    inner_offset + index,
+                    outer_offset + next_index,
+                    inner_offset + next_index,
+                )
+            )
+
+    outer_offset = 1 + (layers - 1) * refined_boundary_count
+    edges = np.asarray(
+        [
+            (
+                outer_offset + index,
+                outer_offset + ((index + 1) % refined_boundary_count),
+                boundary_labels[index],
+            )
+            for index in range(refined_boundary_count)
+        ],
+        dtype=np.int64,
+    )
+    electrode_nodes = np.asarray(
+        [
+            [
+                outer_offset + 2 * electrode * subdivisions + sub_index
+                for sub_index in range(subdivisions + 1)
+            ]
+            for electrode in range(N_ELECTRODES)
+        ],
+        dtype=np.int64,
+    )
+    electrode_counts = np.full(
+        N_ELECTRODES,
+        subdivisions + 1,
+        dtype=np.int64,
+    )
+    cell_array = np.asarray(cells, dtype=np.int64)
+    for triangle in cell_array:
+        a, b, c = (nodes[int(index)] for index in triangle)
+        determinant = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])
+        if determinant <= 0:
+            raise RuntimeError("refined exact mesh contains a non-positive triangle")
+    for value in (coordinate for point in nodes for coordinate in point):
+        if value.denominator & (value.denominator - 1):
+            raise RuntimeError("refined exact mesh coordinate is not dyadic")
+    return tuple(nodes), cell_array, edges, electrode_nodes, electrode_counts
+
+
+def exact_case_mesh(
+    case: ExactCase,
+) -> tuple[
+    tuple[tuple[Fraction, Fraction], ...],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Build the declared fixed-domain mesh for one exact-suite case."""
+
+    return exact_refined_circular_mesh(
+        edge_subdivisions=case.edge_subdivisions,
+        radial_layers=case.radial_layers,
+    )
+
+
 def float_nodes(
     exact_nodes: tuple[tuple[Fraction, Fraction], ...],
 ) -> np.ndarray:
@@ -297,9 +438,7 @@ def _case_directory(output_dir: Path, case: ExactCase) -> Path:
 
 
 def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
-    exact_nodes, cells, edges, electrode_nodes, electrode_counts = exact_circular_mesh(
-        case.ring_count
-    )
+    exact_nodes, cells, edges, electrode_nodes, electrode_counts = exact_case_mesh(case)
     nodes = float_nodes(exact_nodes)
     currents = exact_current_patterns(case.drive_skip)
     fingerprint = canonical_mesh_fingerprint(nodes, cells, edges)
@@ -322,7 +461,7 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
         "truth_elem_data": np.full(cells.shape[0], float(case.conductivity)),
         "contact_impedance": float(case.contact_impedance),
         "mesh_name": f"cem_exact_{case.case_id.lower()}",
-        "mesh_level": f"rational_circular_rings_{case.ring_count}",
+        "mesh_level": case.refinement_level_id,
         "scenario_name": case.label,
         "electrode_coverage": 0.64,
         "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
@@ -331,6 +470,9 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
         "geometry_schema": GEOMETRY_SCHEMA,
         "case_id": case.case_id,
         "ring_count": case.ring_count,
+        "refinement_level_id": case.refinement_level_id,
+        "edge_subdivisions": case.edge_subdivisions,
+        "radial_layers": case.radial_layers,
         "current_patterns": currents,
         "drive_skip": case.drive_skip,
     }
@@ -342,6 +484,10 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
         "case": asdict(case),
         "case_id": case.case_id,
         "label": case.label,
+        "ring_count": case.ring_count,
+        "refinement_level_id": case.refinement_level_id,
+        "edge_subdivisions": case.edge_subdivisions,
+        "radial_layers": case.radial_layers,
         "mesh_fingerprint_schema": MESH_FINGERPRINT_SCHEMA,
         "mesh_fingerprint": fingerprint,
         "nodes": int(nodes.shape[0]),
@@ -578,7 +724,7 @@ def _rational_zero_sum_basis() -> Matrix:
 def solve_exact_case(case: ExactCase) -> dict[str, Any]:
     """Solve both exact classic and exact Robin systems over QQ."""
 
-    nodes, cells, edges, _, _ = exact_circular_mesh(case.ring_count)
+    nodes, cells, edges, _, _ = exact_case_mesh(case)
     a_r, coupling, electrode_matrix = assemble_exact_cem(
         nodes,
         cells,
@@ -603,7 +749,9 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
     rhs = SparseMatrix.zeros(full_size, currents.cols)
     rhs[node_count : node_count + N_ELECTRODES, :] = currents
 
-    classic_solution = Matrix(full_matrix).inv(method="DM") * Matrix(rhs)
+    full_domain_matrix = full_matrix.to_DM().convert_to(QQ)
+    rhs_domain_matrix = rhs.to_DM().convert_to(QQ)
+    classic_solution = full_domain_matrix.lu_solve(rhs_domain_matrix).to_Matrix()
     classic_residual = Matrix(full_matrix) * classic_solution - Matrix(rhs)
     if any(value != 0 for value in classic_residual):
         raise RuntimeError(f"{case.case_id} exact classic residual is not zero")
@@ -612,12 +760,16 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
         :,
     ]
 
-    response = a_r.inv(method="DM") * coupling
+    a_r_domain_matrix = a_r.to_DM().convert_to(QQ)
+    coupling_domain_matrix = coupling.to_DM().convert_to(QQ)
+    response = a_r_domain_matrix.lu_solve(coupling_domain_matrix).to_Matrix()
     schur = electrode_matrix - coupling.T * response
     basis = _rational_zero_sum_basis()
     reduced_map = basis.T * schur * basis
     reduced_rhs = basis.T * currents
-    coefficients = reduced_map.inv(method="DM") * reduced_rhs
+    reduced_domain_matrix = reduced_map.to_DM().convert_to(QQ)
+    reduced_rhs_domain_matrix = reduced_rhs.to_DM().convert_to(QQ)
+    coefficients = reduced_domain_matrix.lu_solve(reduced_rhs_domain_matrix).to_Matrix()
     robin_voltage = basis * coefficients
     robin_residual = reduced_map * coefficients - reduced_rhs
     if any(value != 0 for value in robin_residual):
@@ -646,6 +798,8 @@ def solve_exact_case(case: ExactCase) -> dict[str, Any]:
         "exact_classic_residual_zero": True,
         "exact_robin_residual_zero": True,
         "exact_classic_robin_identical": True,
+        "exact_linear_solver": "DomainMatrix.lu_solve",
+        "exact_domain": "QQ",
         "truth_sha256": truth_digest,
         "truth_fraction_strings": exact_strings,
     }
@@ -803,17 +957,17 @@ def _validate_solver_report(
 def aggregate_metrics(metrics: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate per-case metrics without hiding ordering reversals."""
 
+    observed_case_ids = {str(item["case_id"]) for item in metrics}
+    observed_cases = [case for case in CASES if case.case_id in observed_case_ids]
+    solvers = sorted({str(item["solver"]) for item in metrics})
     rankings: dict[str, list[dict[str, Any]]] = {}
     strict_orders: dict[str, list[tuple[str, ...]]] = {
         formulation: [] for formulation in FORMULATIONS
     }
     win_counts = {
-        formulation: {
-            solver: 0 for solver in sorted({item["solver"] for item in metrics})
-        }
-        for formulation in FORMULATIONS
+        formulation: {solver: 0 for solver in solvers} for formulation in FORMULATIONS
     }
-    for case in CASES:
+    for case in observed_cases:
         for formulation in FORMULATIONS:
             selected = sorted(
                 (
@@ -840,7 +994,7 @@ def aggregate_metrics(metrics: list[dict[str, Any]]) -> dict[str, Any]:
             win_counts[formulation][order[0]] += 1
 
     solver_summary: dict[str, dict[str, Any]] = {}
-    for solver in sorted({str(item["solver"]) for item in metrics}):
+    for solver in solvers:
         solver_summary[solver] = {}
         for formulation in FORMULATIONS:
             errors = np.asarray(
@@ -868,10 +1022,90 @@ def aggregate_metrics(metrics: list[dict[str, Any]]) -> dict[str, Any]:
             "ordering": list(orders[0]) if same else None,
             "observed_orders": [list(order) for order in orders],
         }
+
+    case_lookup = {case.case_id: case for case in CASES}
+    refinement_case_ids = [
+        case_id for case_id in REFINEMENT_CASE_IDS if case_id in observed_case_ids
+    ]
+    refinement_mesh_sizes = {}
+    for case_id in refinement_case_ids:
+        exact_nodes, exact_cells, *_ = exact_case_mesh(case_lookup[case_id])
+        refinement_mesh_sizes[case_id] = (len(exact_nodes), int(exact_cells.shape[0]))
+    refinement_summary: dict[str, Any] = {}
+    for formulation in FORMULATIONS:
+        level_orders = [
+            tuple(item["solver"] for item in rankings[f"{case_id}:{formulation}"])
+            for case_id in refinement_case_ids
+        ]
+        level_win_counts = {solver: 0 for solver in solvers}
+        for order in level_orders:
+            level_win_counts[str(order[0])] += 1
+        per_solver: dict[str, Any] = {}
+        for solver in solvers:
+            selected = [
+                next(
+                    item
+                    for item in metrics
+                    if item["case_id"] == case_id
+                    and item["solver"] == solver
+                    and item["formulation"] == formulation
+                )
+                for case_id in refinement_case_ids
+            ]
+            errors = np.asarray(
+                [item["truth_relative_l2"] for item in selected],
+                dtype=np.float64,
+            )
+            per_solver[solver] = {
+                "nodes": [
+                    int(
+                        item.get(
+                            "nodes",
+                            refinement_mesh_sizes[str(item["case_id"])][0],
+                        )
+                    )
+                    for item in selected
+                ],
+                "cells": [
+                    int(
+                        item.get(
+                            "cells",
+                            refinement_mesh_sizes[str(item["case_id"])][1],
+                        )
+                    )
+                    for item in selected
+                ],
+                "truth_relative_l2": [float(value) for value in errors],
+                "geometric_mean_truth_relative_l2": float(
+                    np.exp(np.mean(np.log(errors)))
+                ),
+                "median_truth_relative_l2": float(np.median(errors)),
+                "worst_truth_relative_l2": float(np.max(errors)),
+            }
+        refinement_summary[formulation] = {
+            "case_ids": list(refinement_case_ids),
+            "level_ids": [
+                case_lookup[case_id].refinement_level_id
+                for case_id in refinement_case_ids
+            ],
+            "edge_subdivisions": [
+                case_lookup[case_id].edge_subdivisions
+                for case_id in refinement_case_ids
+            ],
+            "radial_layers": [
+                case_lookup[case_id].radial_layers for case_id in refinement_case_ids
+            ],
+            "win_counts": level_win_counts,
+            "observed_orders": [list(order) for order in level_orders],
+            "universal_ordering_supported": bool(level_orders)
+            and all(order == level_orders[0] for order in level_orders[1:]),
+            "per_solver": per_solver,
+        }
     return {
         "rankings": rankings,
         "solver_summary": solver_summary,
         "universal_ordering": universal_ordering,
+        "refinement_summary": refinement_summary,
     }
 
 
@@ -1039,9 +1273,10 @@ def _plot_suite(metrics: list[dict[str, Any]], path: Path) -> None:
     solvers = sorted({str(item["solver"]) for item in metrics})
     colors = dict(zip(solvers, ("#1f5a94", "#c56a1a", "#687a3c"), strict=True))
     markers = dict(zip(solvers, ("o", "s", "^"), strict=True))
-    offsets = dict(zip(solvers, (-0.16, 0.0, 0.16), strict=True))
+    line_styles = dict(zip(solvers, ("-", "--", ":"), strict=True))
     figure, axes = plt.subplots(2, 2, figsize=(13.0, 8.2), constrained_layout=True)
-    x = np.arange(len(CASES), dtype=float)
+    case_lookup = {case.case_id: case for case in CASES}
+    refinement_cases = [case_lookup[case_id] for case_id in REFINEMENT_CASE_IDS]
     for column, formulation in enumerate(FORMULATIONS):
         for solver in solvers:
             selected = [
@@ -1052,44 +1287,59 @@ def _plot_suite(metrics: list[dict[str, Any]], path: Path) -> None:
                     and item["solver"] == solver
                     and item["formulation"] == formulation
                 )
-                for case in CASES
+                for case in refinement_cases
             ]
-            axes[0, column].scatter(
-                x + offsets[solver],
+            x = np.asarray([item["nodes"] for item in selected], dtype=np.float64)
+            axes[0, column].plot(
+                x,
                 [item["truth_relative_l2"] for item in selected],
                 marker=markers[solver],
+                linestyle=line_styles[solver],
                 label=solver,
                 color=colors[solver],
-                edgecolor="#262626",
-                linewidth=0.45,
-                s=42,
+                markerfacecolor="white",
+                markeredgewidth=1.3,
+                linewidth=1.6,
+                markersize=6.0,
             )
-            axes[1, column].scatter(
-                x + offsets[solver],
+            axes[1, column].plot(
+                x,
                 [item["exact_reduced_scaled_backward_residual"] for item in selected],
                 marker=markers[solver],
+                linestyle=line_styles[solver],
                 label=solver,
                 color=colors[solver],
-                edgecolor="#262626",
-                linewidth=0.45,
-                s=42,
+                markerfacecolor="white",
+                markeredgewidth=1.3,
+                linewidth=1.6,
+                markersize=6.0,
             )
         display_name = "Classic CEM" if formulation == "classic" else "Robin CEM"
-        axes[0, column].set_title(f"{display_name}: forward truth error")
-        axes[1, column].set_title(f"{display_name}: scaled backward residual")
+        axes[0, column].set_title(f"{display_name}: exact forward error")
+        axes[1, column].set_title(f"{display_name}: exact scaled residual")
         for row in range(2):
             axis = axes[row, column]
             axis.set_yscale("log")
-            axis.set_xticks(x, [case.case_id for case in CASES])
+            axis.set_xscale("log", base=2)
+            axis.set_xticks(
+                x,
+                [
+                    f"{case.refinement_level_id}\n{int(nodes)}"
+                    for case, nodes in zip(refinement_cases, x, strict=True)
+                ],
+            )
             axis.grid(True, alpha=0.25)
             axis.legend(fontsize=8)
             for label in axis.get_xticklabels() + axis.get_yticklabels():
                 label.set_fontname("Times New Roman")
     axes[0, 0].set_ylabel("Relative L2 vs exact QQ solution")
     axes[1, 0].set_ylabel("Exact-system scaled residual")
-    figure.suptitle("Exact rational P1 CEM accuracy by discrete case", fontsize=15)
+    figure.suptitle(
+        "Exact rational P1 CEM accuracy across nested mesh refinement",
+        fontsize=15,
+    )
     figure.supxlabel(
-        "G1-G7 are discrete configurations; logarithmic y axes; 16 RHS per case",
+        "Refinement level and node count; fixed rational polygon; 16 RHS per level",
         fontsize=9,
     )
     figure.savefig(path, dpi=220)
@@ -1119,6 +1369,8 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
             "exact_classic_residual_zero": True,
             "exact_robin_residual_zero": True,
             "exact_classic_robin_identical": True,
+            "exact_linear_solver": reference["exact_linear_solver"],
+            "exact_domain": reference["exact_domain"],
             "electrode_voltage_fractions": reference["truth_fraction_strings"],
         }
         for report in reports:
@@ -1138,6 +1390,11 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
                     {
                         "case_id": case.case_id,
                         "case_label": case.label,
+                        "refinement_level_id": case.refinement_level_id,
+                        "edge_subdivisions": case.edge_subdivisions,
+                        "radial_layers": case.radial_layers,
+                        "nodes": int(fixture["nodes"]),
+                        "cells": int(fixture["cells"]),
                         "solver": report["solver"],
                         "formulation": formulation,
                         "classic_robin_relative_l2": internal_delta,
@@ -1163,12 +1420,13 @@ def compare_suite(output_dir: Path) -> dict[str, Any]:
         ),
         "truth_method": {
             "domain": "QQ exact rational arithmetic",
-            "solver": "SymPy DomainMatrix-backed exact inverse/solve",
+            "solver": "SymPy DomainMatrix QQ multi-RHS lu_solve",
             "uses_any_fem_solver_matrix": False,
             "ranking_requires_zero_exact_residual": True,
             "ranking_requires_exact_classic_robin_identity": True,
         },
         "cases": [asdict(case) for case in CASES],
+        "refinement_case_ids": list(REFINEMENT_CASE_IDS),
         "truth": truth_records,
         "metrics": metrics,
         "timing_methodology": {
