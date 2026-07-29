@@ -205,6 +205,7 @@ class ForwardModelConfig:
 
     n_elec: int = 16
     n_rings: int = 1
+    electrode_model: str = "cem"
     electrode_layout: str = "ring_major"
     measurement_protocol: str = "eidors_full_3d"
     stim_pattern: str = "{ad}"
@@ -259,6 +260,9 @@ class ForwardModelConfig:
         self.mesh_path = str(self.mesh_path or "").strip()
         self.mesh_dimension = int(self.mesh_dimension)
         self.potential_order = max(1, int(self.potential_order))
+        self.electrode_model = str(self.electrode_model or "cem").strip().lower()
+        if self.electrode_model not in {"cem", "pem"}:
+            raise ValueError("electrode_model must be 'cem' or 'pem'")
         self.drive_mode = drive_mode_for_mesh_dimension(
             self.drive_mode,
             self.mesh_dimension,
@@ -318,6 +322,7 @@ class ForwardModelConfig:
             noise_level=float(raw.get("noise_level", 0.0)),
             n_elec=int(raw.get("n_elec", raw.get("n_electrodes", 16))),
             n_rings=int(raw.get("n_rings", 1)),
+            electrode_model=str(raw.get("electrode_model", "cem")),
             electrode_layout=str(raw.get("electrode_layout", "ring_major"))
             .strip()
             .lower()
@@ -405,6 +410,7 @@ class ForwardModelConfig:
             "noise_level": float(self.noise_level),
             "n_elec": int(self.n_elec),
             "n_rings": int(self.n_rings),
+            "electrode_model": self.electrode_model,
             "electrode_layout": self.electrode_layout,
             "measurement_protocol": self.measurement_protocol,
             "stim_pattern": self.stim_pattern,
@@ -466,6 +472,7 @@ class ForwardModelConfig:
         return {
             "dimension": self.display_dimension(),
             "electrodes": f"{int(self.n_elec)}E x {int(self.n_rings)}R",
+            "electrode_model": self.electrode_model.upper(),
             "layout": self.electrode_layout,
             "protocol": self.measurement_protocol,
             "patterns": f"{self.stim_pattern} / {self.meas_pattern}",
@@ -497,10 +504,7 @@ class ForwardModelConfig:
                 item
                 for item in blockers
                 if item
-                != (
-                    "point_or_distributed_point_electrode_requires_"
-                    "explicit_projection_opt_in"
-                )
+                != ("distributed_point_electrode_requires_explicit_projection_opt_in")
             ]
         if blockers:
             raise ValueError(

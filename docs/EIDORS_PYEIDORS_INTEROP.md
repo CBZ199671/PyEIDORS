@@ -116,26 +116,33 @@ EIDORS 电极的标准判定与迁移策略如下。
 | --- | --- | --- | --- |
 | `electrode(i).faces` | `cem_faces` | 是，保存 faces 和节点并集 | 可以 |
 | 多节点且覆盖完整边界 facet | `cem` | 是，保存精确表面节点 | 可以 |
-| 单节点 | `point` | 是，保存精确点坐标/节点 | 默认阻止 |
+| 单节点 | `point` | 是，保存精确点坐标/节点 | 原生 PEM，可以 |
 | 多节点但不包含完整边界 facet | `distributed_point` | 是 | 默认阻止 |
 
-PyEIDORS 当前正演使用正面积 CEM。把 PEM 点电极映射到相邻 boundary facets
-会改变电极模型，因此不会默认发生。若用户明确接受这一近似，可运行：
+单节点模型导入后会自动得到 `electrode_model=pem`。PyEIDORS 直接建立
+vertex-to-DOF 的一热矩阵 `N2E`：
 
-```bash
-pyeidors-interop import-geometry output/pem_bridge \
-  --forward-smoke \
-  --allow-point-electrode-projection
+```text
+节点电流：Q = N2Eᵀ I
+电极电压：U = N2E u
 ```
 
-报告会写出：
+因此点电极不会接触任何 boundary facet，也不需要用户同意投影。报告会写出：
 
 - 精确表面电极：`electrode_projection=exact_surface_nodes`；
-- 明确接受的点电极近似：`electrode_projection=incident_boundary_facets`。
+- 原生单节点 PEM：`electrode_model=pem`、`electrode_projection=none`；
+- 仅分布式点电极近似：`electrode_projection=incident_boundary_facets`，且仍需
+  `--allow-point-electrode-projection` 明确同意。
 
-`z_contact` 不存在通用 EIDORS 默认值。捕获器保存每个电极的原值以及
-`contact_impedance_present`；缺失时写 `NaN + false` 并阻止正演，不会补
-`0.01`。按 EIDORS 一阶系统矩阵约定，其量纲为：
+对 CEM，`z_contact` 不存在通用 EIDORS 默认值。捕获器保存每个电极的原值以及
+`contact_impedance_present`；缺失时写 `NaN + false` 并阻止 CEM 正演，不会补
+`0.01`。对单节点 PEM，EIDORS 一阶系统矩阵不装配任何 `1/z_contact` 边界项，
+所以 `z_contact` 不参与物理计算，PyEIDORS 也会忽略它。EIDORS 的
+`valid_fwd_model` 仍要求该字段存在，因此 PyEIDORS→EIDORS 导出会写一个有限的
+结构占位值，并在 provenance 中标为
+`eidors_structural_placeholder_not_used_by_pem`，不能把它解释为接触阻抗。
+
+对实际使用接触阻抗的 CEM，按 EIDORS 一阶系统矩阵约定，其量纲为：
 
 - 2D：`Ω·源长度单位`；
 - 3D：`Ω·源长度单位²`。
@@ -237,8 +244,8 @@ python scripts/interop/run_eidors_source_semantics_acceptance.py \
   --eidors-startup '/mnt/d/Program Files/MATLAB/R2023b/toolbox/eidors-v3.12-ng/eidors/startup.m'
 ```
 
-它同时验证 2D/3D CEM、PEM、缺失字段、`0.02/2=0.01 A`、resistivity 转换、
-默认 PEM 阻止和显式 PEM 投影正演。
+它同时验证 2D/3D CEM、原生 PEM、缺失字段、`0.02/2=0.01 A`、
+resistivity 转换以及 PEM 无投影正演。
 
 本次真实环境结果记录在
 `reports/interop/eidors_source_semantics_acceptance_20260730.md`。
@@ -262,8 +269,8 @@ GUI 中完成仿真后打开“工具 → EIDORS 互操作”，选择当前 Sim
 
 脚本会恢复：
 
-- 实际网格、boundary facets 和 CEM 电极节点/faces；
-- 接触阻抗及其存在性门禁；
+- 实际网格、boundary facets，以及 CEM 的表面节点/faces 或 PEM 的单节点；
+- CEM 接触阻抗；PEM 则写 EIDORS 结构校验所需、但不参与计算的标记占位值；
 - 明确记录的 ground/normalize 语义；
 - 自定义刺激/测量矩阵，或由明确 PyEIDORS 配置生成的协议；
 - CSV 实数测量或 MAT 复数测量。
@@ -295,7 +302,18 @@ from pyeidors.interop import build_mesh_from_exchange_mat
 
 mesh, metadata = build_mesh_from_exchange_mat(Path("bridge/geometry.mat"))
 print(metadata["n_elec"])
+print(mesh.electrode_model)       # "cem" 或 "pem"
+print(mesh.electrode_projection)  # PEM 为 "none"
+
+# 返回的逐单元场已自动按 DOLFINx 本地单元序重排，可直接用于正演：
+target_sigma = metadata["target_elem_data"]
+data = system.forward_solve(target_sigma)
 ```
+
+`geometry.mat` 文件本身仍保留 EIDORS 源单元序；`build_mesh_from_exchange_mat`
+会依据 DOLFINx 的 `original_cell_index` 自动重排返回的
+`background_elem_data`、`target_elem_data` 和 `truth_elem_data`，并在
+`metadata["source_cell_indices"]` 中保留“本地单元 → 源单元”的精确映射。
 
 读取完整包并检查正演就绪性：
 
@@ -311,12 +329,30 @@ config = preview.forward_model_config
 config.require_interop_forward_ready()
 ```
 
-PEM 投影必须显式开启：
+若 `config.electrode_model == "pem"`，后续 GUI、worker、dataset 和 CLI 会把同一
+设置传给 `EITSystem`；用户不需要自己把节点转换成面。直接构造原生模型时，网格
+需要提供一个 0-based source node id/电极：
 
 ```python
-config = config.with_overrides(allow_interop_approximations=True)
+mesh.electrode_model = "pem"
+mesh.point_electrode_source_nodes = [4, 9, 15, 22]
+mesh.gnd_node_source = 0
+```
+
+PEM 只接受 P1 potential space 和以安培表示的
+`drive_mode="total_current"`（或无量纲 `normalized`）；注入模式每行必须有限且
+净电流为零。
+
+单节点 PEM 无需开启近似：
+
+```python
+assert config.electrode_model == "pem"
+assert config.interop_semantics["electrode_projection"] == "none"
 config.require_interop_forward_ready()
 ```
+
+只有 `distributed_point` 的 incident-facet 近似才需要
+`allow_interop_approximations=True`；混合 CEM/PEM 模型仍会明确拒绝。
 
 ## Bridge Package v2
 
@@ -368,7 +404,8 @@ manifest 只允许安全相对路径；本机 MATLAB/EIDORS 绝对路径属于�
 - 网格拓扑/坐标、电极和刺激测量矩阵已被确定地迁移；
 - 原始值、EIDORS 有效值、运行时默认和缺失值没有混为一谈；
 - 2D/3D CEM 可进入真实 PyEIDORS 计算链；
-- PEM 只有经明确同意才转换为 incident-facet CEM 近似。
+- 单节点 PEM 以原始节点、原始 ground、节点注流和节点读压原生运行；
+- 分布式点电极近似必须明确同意，混合 CEM/PEM 不会静默转换。
 
 它不能仅凭格式 roundtrip 声明两个框架的逆问题结果逐元素相等。正则化、
 先验、归一化、solver、离散空间和浮点精度仍需单独的数值等价报告。

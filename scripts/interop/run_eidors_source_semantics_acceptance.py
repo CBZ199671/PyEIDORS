@@ -14,9 +14,18 @@ import numpy as np
 from scipy.io import loadmat
 
 from eit_app.interop import (
+    EidorsExportJob,
     EidorsBridgeRunner,
     EidorsEnvironment,
+    InteropBundleImporter,
+    InteropBundleExporter,
+    build_geometry_payload_from_result,
     validate_bridge_package,
+)
+from eit_app.interop.environment import (
+    _run_command_capture,
+    matlab_command_for_execution,
+    matlab_runtime_path,
 )
 
 
@@ -56,8 +65,6 @@ def _float_scalar(value: Any) -> float:
 def _run_import(
     repo_root: Path,
     package: Path,
-    *,
-    allow_point_projection: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     command = [
         sys.executable,
@@ -67,8 +74,6 @@ def _run_import(
         str(package),
         "--forward-smoke",
     ]
-    if allow_point_projection:
-        command.append("--allow-point-electrode-projection")
     result = subprocess.run(
         command,
         cwd=repo_root,
@@ -100,6 +105,161 @@ def _capture(
     return report, geometry
 
 
+def _relative_l2(actual: np.ndarray, reference: np.ndarray) -> float:
+    numerator = float(np.linalg.norm(np.asarray(actual) - np.asarray(reference)))
+    denominator = max(float(np.linalg.norm(reference)), np.finfo(float).eps)
+    return numerator / denominator
+
+
+def _native_pem_parity(package: Path) -> dict[str, Any]:
+    from pyeidors import EITSystem
+    from pyeidors.data import PatternConfig
+    from pyeidors.interop import build_mesh_from_exchange_mat
+
+    loaded, preview = InteropBundleImporter().preview_package(package)
+    config = preview.forward_model_config
+    measurements = loaded.measurements or {}
+    config.require_interop_forward_ready()
+    if config.electrode_model != "pem":
+        raise RuntimeError(
+            f"Expected native PEM config, got {config.electrode_model!r}"
+        )
+
+    pattern = PatternConfig(
+        n_elec=config.n_elec,
+        n_rings=config.n_rings,
+        stim_pattern=config.stim_pattern,
+        meas_pattern=config.meas_pattern,
+        electrode_layout=config.electrode_layout,
+        measurement_protocol=config.measurement_protocol,
+        custom_stim_matrix=config.custom_stim_matrix,
+        custom_meas_matrices=config.custom_meas_matrices,
+        drive_mode=config.drive_mode,
+        drive_value=config.drive_value,
+        geometry_scale_to_m=config.geometry_scale_to_m,
+        use_meas_current=config.use_meas_current,
+        use_meas_current_next=config.use_meas_current_next,
+        rotate_meas=config.rotate_meas,
+        stim_direction=config.stim_direction,
+        meas_direction=config.meas_direction,
+        stim_first_positive=config.stim_first_positive,
+    )
+    mesh, local_geometry = build_mesh_from_exchange_mat(package / "geometry.mat")
+    background = np.asarray(local_geometry["background_elem_data"]).reshape(-1)
+    target = np.asarray(local_geometry["target_elem_data"]).reshape(-1)
+    eidors_background = np.asarray(measurements["homogeneous"]).reshape(-1)
+    eidors_target = np.asarray(measurements["target"]).reshape(-1)
+
+    pyeidors_measurements: list[tuple[np.ndarray, np.ndarray]] = []
+    for contact_impedance in (config.contact_impedance, np.full(config.n_elec, 1e9)):
+        system = EITSystem(
+            n_elec=config.total_electrodes(),
+            pattern_config=pattern,
+            electrode_model="pem",
+            contact_impedance=contact_impedance,
+            base_conductivity=config.background_conductivity,
+            linear_backend="scipy",
+            forward_backend="dolfinx",
+            petsc_device="cpu",
+            potential_order=1,
+        )
+        system.setup(mesh=mesh, initialize_inverse=False)
+        pyeidors_measurements.append(
+            (
+                np.asarray(system.forward_solve(background).meas).reshape(-1),
+                np.asarray(system.forward_solve(target).meas).reshape(-1),
+            )
+        )
+
+    py_background, py_target = pyeidors_measurements[0]
+    alternate_background, alternate_target = pyeidors_measurements[1]
+    return {
+        "background_relative_l2": _relative_l2(
+            py_background,
+            eidors_background,
+        ),
+        "target_relative_l2": _relative_l2(py_target, eidors_target),
+        "z_contact_background_max_abs": float(
+            np.max(np.abs(py_background - alternate_background), initial=0.0)
+        ),
+        "z_contact_target_max_abs": float(
+            np.max(np.abs(py_target - alternate_target), initial=0.0)
+        ),
+        "n_measurements": int(py_background.size),
+        "electrode_model": config.electrode_model,
+        "electrode_projection": config.interop_semantics["electrode_projection"],
+    }
+
+
+def _build_pem_roundtrip_export(
+    captured_package: Path,
+    output: Path,
+    environment: EidorsEnvironment,
+) -> Path:
+    loaded, preview = InteropBundleImporter().preview_package(captured_package)
+    geometry = loaded.geometry_payload or {}
+    config = preview.forward_model_config.with_overrides(contact_impedance=None)
+    export_geometry = build_geometry_payload_from_result(
+        node_coords=np.asarray(geometry["nodes"]),
+        cell_connectivity=np.asarray(geometry["elems"], dtype=np.int64) - 1,
+        forward_model_config=config,
+        truth_elem_data=np.asarray(geometry["target_elem_data"]).reshape(-1),
+        background=float(np.asarray(geometry["background"]).reshape(-1)[0]),
+        boundary_facets=np.asarray(geometry["boundary_facets"], dtype=np.int64),
+        electrode_nodes=np.asarray(geometry["electrode_nodes"], dtype=np.int64),
+        electrode_node_counts=np.asarray(
+            geometry["electrode_node_counts"],
+            dtype=np.int64,
+        ),
+        source_framework="pyeidors",
+        mesh_name="pyeidors_native_pem_roundtrip",
+        scenario_name="native_pem_roundtrip",
+    )
+    return InteropBundleExporter().export_bundle(
+        EidorsExportJob(
+            source_kind="simulation",
+            source_name="native PEM roundtrip",
+            output_dir=str(output),
+        ),
+        forward_model_config=config,
+        environment=environment,
+        geometry_payload=export_geometry,
+        measurements=loaded.measurements,
+    )
+
+
+def _validate_roundtrip_in_eidors(
+    *,
+    environment: EidorsEnvironment,
+    repo_root: Path,
+    package: Path,
+) -> dict[str, Any]:
+    examples_dir = matlab_runtime_path(repo_root / "examples" / "interop", environment)
+    run_script = matlab_runtime_path(package / "run_in_eidors.m", environment)
+    report_path = package / "eidors_import_report.json"
+    runtime_report = matlab_runtime_path(report_path, environment)
+    escaped_examples_dir = examples_dir.replace("'", "''")
+    escaped_run_script = run_script.replace("'", "''")
+    escaped_runtime_report = runtime_report.replace("'", "''")
+    expression = (
+        f"addpath('{escaped_examples_dir}');"
+        "validate_bridge_in_eidors("
+        f"'{escaped_run_script}',"
+        f"'{escaped_runtime_report}');"
+    )
+    returncode, stdout, stderr = _run_command_capture(
+        [matlab_command_for_execution(environment), "-batch", expression],
+        timeout=180,
+    )
+    if returncode != 0:
+        raise RuntimeError(
+            stderr.strip()
+            or stdout.strip()
+            or "MATLAB/EIDORS PEM roundtrip validation failed."
+        )
+    return json.loads(report_path.read_text(encoding="utf-8"))
+
+
 def main() -> int:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[2]
@@ -108,6 +268,7 @@ def main() -> int:
         "cem_2d": output_root / "cem_2d",
         "cem_surface": output_root / "cem_surface",
         "pem_current_density": output_root / "pem_current_density",
+        "pem_roundtrip_export": output_root / "pem_roundtrip_export",
         "missing_fields": output_root / "missing_fields",
         "ambiguous_auto": output_root / "ambiguous_auto",
         "explicit_selector": output_root / "explicit_selector",
@@ -168,6 +329,16 @@ def main() -> int:
         case_paths["explicit_selector"],
         selectors={"fwd_model_var": "fmdl_b"},
     )
+    pem_roundtrip_path = _build_pem_roundtrip_export(
+        case_paths["pem_current_density"],
+        case_paths["pem_roundtrip_export"],
+        environment,
+    )
+    pem_eidors_roundtrip = _validate_roundtrip_in_eidors(
+        environment=environment,
+        repo_root=repo_root,
+        package=pem_roundtrip_path,
+    )
 
     cem_2d_code, cem_2d_import = _run_import(
         repo_root,
@@ -177,17 +348,13 @@ def main() -> int:
         repo_root,
         case_paths["cem_surface"],
     )
-    pem_blocked_code, pem_blocked = _run_import(
+    pem_code, pem_import = _run_import(
         repo_root,
         case_paths["pem_current_density"],
-    )
-    pem_allowed_code, pem_allowed = _run_import(
-        repo_root,
-        case_paths["pem_current_density"],
-        allow_point_projection=True,
     )
 
     pem = geometries["pem_current_density"]
+    pem_parity = _native_pem_parity(case_paths["pem_current_density"])
     missing = geometries["missing_fields"]
     pem_raw = np.asarray(pem["stim_matrix_raw"], dtype=float)
     pem_effective = np.asarray(pem["stim_matrix"], dtype=float)
@@ -242,14 +409,32 @@ def main() -> int:
             np.isclose(_float_scalar(pem["background"]), 2.0)
             and np.isclose(pem_target[0], 4.0)
         ),
-        "pem_default_forward_is_blocked": (
-            pem_blocked_code != 0
-            and "point_or_distributed_point" in str(pem_blocked.get("message", ""))
+        "pem_native_forward_ready": (
+            reports["pem_current_density"]["forward_ready"] is True
         ),
-        "pem_explicit_projection_smoke": (
-            pem_allowed_code == 0
-            and pem_allowed.get("forward_smoke") == "passed"
-            and pem_allowed.get("electrode_projection") == "incident_boundary_facets"
+        "pem_native_forward_smoke": (
+            pem_code == 0
+            and pem_import.get("forward_smoke") == "passed"
+            and pem_import.get("electrode_model") == "pem"
+            and pem_import.get("electrode_projection") == "none"
+        ),
+        "pem_native_eidors_background_parity": (
+            pem_parity["background_relative_l2"] <= 5e-4
+        ),
+        "pem_native_eidors_target_parity": (pem_parity["target_relative_l2"] <= 5e-4),
+        "pem_z_contact_is_nonphysical": (
+            pem_parity["z_contact_background_max_abs"] == 0.0
+            and pem_parity["z_contact_target_max_abs"] == 0.0
+        ),
+        "pem_pyeidors_to_eidors_roundtrip": (
+            pem_eidors_roundtrip["status"] == "passed"
+            and pem_eidors_roundtrip["electrode_model"] == "pem"
+            and pem_eidors_roundtrip["electrodes_exact"] is True
+            and pem_eidors_roundtrip["protocol_exact"] is True
+            and pem_eidors_roundtrip["pem_singleton_exact"] is True
+            and pem_eidors_roundtrip["pem_no_projection"] is True
+            and pem_eidors_roundtrip["pem_contact_marked_not_applicable"] is True
+            and pem_eidors_roundtrip["pem_z_contact_invariant"] is True
         ),
         "missing_geometry_still_valid": reports["missing_fields"]["valid"] is True,
         "missing_contact_not_fabricated": (
@@ -296,8 +481,7 @@ def main() -> int:
         "imports": {
             "cem_2d": cem_2d_import,
             "cem_surface": cem_import,
-            "pem_default_blocked": pem_blocked,
-            "pem_explicit_projection": pem_allowed,
+            "pem_native": pem_import,
         },
         "discovery": {
             "ambiguous_auto_error": ambiguity_error,
@@ -310,6 +494,8 @@ def main() -> int:
             "pem_background_conductivity": 2.0,
             "pem_target_first_element_conductivity": 4.0,
         },
+        "pem_native_parity": pem_parity,
+        "pem_eidors_roundtrip": pem_eidors_roundtrip,
     }
     report_path.write_text(
         json.dumps(

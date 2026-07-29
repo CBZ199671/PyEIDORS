@@ -5603,6 +5603,7 @@ def _run_full_gn_request(
         system = EITSystem(
             n_elec=total_electrodes,
             pattern_config=pattern_config,
+            electrode_model=str(meta.get("electrode_model", "cem")),
             regularization_alpha=req.regularization_alpha,
             hyperparameter=hyperparameter,
             difference_mode=meta["difference_mode"],

@@ -7,7 +7,8 @@ PyEIDORS-specific export calls.
 - `eidors_3d_quickstart.m`: 3D surface CEM, adjacent protocol, one sphere.
 - `eidors_3d_point_electrode_quickstart.m`: 3D PEM with an exact
   `0.02 / current_density(2) = 0.01 A` effective drive and
-  resistivity-to-conductivity mapping.
+  resistivity-to-conductivity mapping. PyEIDORS imports the singleton nodes as
+  native PEM (`electrode_projection=none`).
 - `eidors_missing_fields_semantics.m`: deliberately missing contact,
   ground-node, and normalization source fields; verifies that capture does
   not invent values.

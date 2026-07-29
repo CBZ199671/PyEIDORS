@@ -108,6 +108,18 @@ def _infer_electrode_tags(mesh) -> list[int]:
 
 def build_electrode_arrays(mesh) -> tuple[np.ndarray, np.ndarray]:
     """Collect padded electrode node ids from a marked DOLFINx PyEIDORS mesh."""
+    if str(getattr(mesh, "electrode_model", "")).strip().lower() == "pem":
+        source_nodes = np.asarray(
+            getattr(mesh, "point_electrode_source_nodes", []),
+            dtype=np.int64,
+        ).reshape(-1)
+        if source_nodes.size == 0:
+            raise ValueError("PEM mesh is missing exact point electrode source nodes")
+        return source_nodes.reshape(-1, 1) + 1, np.ones(
+            source_nodes.size,
+            dtype=np.int64,
+        )
+
     boundary_markers = getattr(mesh, "facet_tags", None)
     electrode_tags = _infer_electrode_tags(mesh)
     if boundary_markers is None or not electrode_tags:
@@ -635,6 +647,27 @@ def _create_dolfinx_simplex_mesh(
     return dmesh.create_mesh(MPI.COMM_WORLD, elems, domain, nodes)
 
 
+def source_cell_data_to_local(mesh, values: Any, *, name: str = "cell data"):
+    """Map source-file cell data into the imported DOLFINx local cell order."""
+    source_indices = np.asarray(
+        getattr(mesh, "source_cell_indices", []),
+        dtype=np.int64,
+    ).reshape(-1)
+    if source_indices.size != mesh.num_cells():
+        raise ValueError(
+            f"{name} cannot be mapped: imported mesh has no complete source-cell map"
+        )
+    array = np.asarray(values)
+    if array.ndim == 0 and source_indices.size == 1 and source_indices[0] == 0:
+        return array.reshape(1)
+    if array.ndim == 0 or array.shape[0] <= int(np.max(source_indices, initial=-1)):
+        raise ValueError(
+            f"{name} must have a source-cell leading axis covering "
+            f"{int(np.max(source_indices, initial=-1)) + 1} cells"
+        )
+    return np.asarray(array[source_indices])
+
+
 def _standard_facet_tags(
     mesh,
     boundary_facets: np.ndarray,
@@ -715,6 +748,12 @@ def _standard_facet_tags(
             for index, model in enumerate(electrode_models)
             if model in {"point", "distributed_point"}
         }
+    native_pem = bool(
+        electrode_models
+        and len(electrode_models) == len(electrode_sets)
+        and all(model == "point" for model in electrode_models)
+        and all(len(node_set) == 1 for node_set in electrode_sets)
+    )
     markers: dict[int, int] = {}
     marker_counts = np.zeros(len(electrode_sets), dtype=np.int64)
     for facet_idx, source_vertices in boundary_records:
@@ -725,31 +764,35 @@ def _standard_facet_tags(
                 marker_counts[elec_idx - 1] += 1
                 break
 
-    for point_index in sorted(point_electrodes):
-        node_set = electrode_sets[point_index]
-        candidates = [
-            facet_idx
-            for facet_idx, source_vertices in boundary_records
-            if node_set.intersection(source_vertices)
-        ]
-        if not candidates:
-            raise ValueError(
-                f"Point electrode {point_index + 1} is not on a boundary facet"
+    if not native_pem:
+        for point_index in sorted(point_electrodes):
+            node_set = electrode_sets[point_index]
+            candidates = [
+                facet_idx
+                for facet_idx, source_vertices in boundary_records
+                if node_set.intersection(source_vertices)
+            ]
+            if not candidates:
+                raise ValueError(
+                    f"Point electrode {point_index + 1} is not on a boundary facet"
+                )
+            selected = next(
+                (facet_idx for facet_idx in candidates if facet_idx not in markers),
+                None,
             )
-        selected = next(
-            (facet_idx for facet_idx in candidates if facet_idx not in markers),
-            None,
-        )
-        if selected is None:
-            raise ValueError(
-                "Unable to assign a unique incident boundary facet to point "
-                f"electrode {point_index + 1}"
-            )
-        markers[selected] = point_index + 2
-        marker_counts[point_index] += 1
+            if selected is None:
+                raise ValueError(
+                    "Unable to assign a unique incident boundary facet to point "
+                    f"electrode {point_index + 1}"
+                )
+            markers[selected] = point_index + 2
+            marker_counts[point_index] += 1
 
     for facet_idx, source_vertices in boundary_records:
         if facet_idx in markers:
+            continue
+        if native_pem:
+            markers[facet_idx] = gap_tag
             continue
         point_candidates = [
             point_index
@@ -763,9 +806,15 @@ def _standard_facet_tags(
         else:
             markers[facet_idx] = gap_tag
 
-    missing_electrodes = [
-        str(index + 1) for index, count in enumerate(marker_counts) if int(count) <= 0
-    ]
+    missing_electrodes = (
+        []
+        if native_pem
+        else [
+            str(index + 1)
+            for index, count in enumerate(marker_counts)
+            if int(count) <= 0
+        ]
+    )
     if missing_electrodes:
         raise ValueError(
             "Imported electrode definitions have no positive boundary facets: "
@@ -792,7 +841,9 @@ def _standard_facet_tags(
         np.ones(n_cells, dtype=np.int32),
     )
     projection = (
-        "incident_boundary_facets" if point_electrodes else "exact_surface_nodes"
+        "none"
+        if native_pem
+        else ("incident_boundary_facets" if point_electrodes else "exact_surface_nodes")
     )
     return facet_tags, cell_tags, association_table, projection
 
@@ -872,4 +923,62 @@ def build_mesh_from_exchange_mat(path: Path):
     mesh.n_electrodes = n_elec
     mesh.electrode_projection = electrode_projection
     mesh.source_electrode_models = electrode_models
+    original_cell_index = np.asarray(
+        dolfinx_mesh.topology.original_cell_index,
+        dtype=np.int64,
+    ).reshape(-1)
+    if original_cell_index.size < mesh.num_cells():
+        raise ValueError(
+            "DOLFINx original-cell map does not cover all imported local cells"
+        )
+    mesh.source_cell_indices = np.ascontiguousarray(
+        original_cell_index[: mesh.num_cells()],
+        dtype=np.int64,
+    )
+    for field in (
+        "background_elem_data",
+        "target_elem_data",
+        "truth_elem_data",
+    ):
+        if field in payload:
+            payload[field] = source_cell_data_to_local(
+                mesh,
+                payload[field],
+                name=field,
+            )
+    payload["source_cell_indices"] = mesh.source_cell_indices.copy()
+    payload["element_data_order"] = "dolfinx_local"
+    if all(model == "point" for model in electrode_models):
+        mesh.electrode_model = "pem"
+        mesh.point_electrode_source_nodes = np.asarray(
+            [int(nodes[0]) for nodes in standard_electrodes],
+            dtype=np.int64,
+        )
+    elif all(model in {"cem", "cem_faces"} for model in electrode_models):
+        mesh.electrode_model = "cem"
+    elif all(model == "distributed_point" for model in electrode_models):
+        mesh.electrode_model = "cem"
+    else:
+        mesh.electrode_model = "mixed"
+    ground_value = payload.get("effective_gnd_node", payload.get("gnd_node"))
+    ground_array = (
+        np.asarray(ground_value).reshape(-1)
+        if ground_value is not None
+        else np.empty(0, dtype=float)
+    )
+    try:
+        ground_scalar = (
+            float(ground_array[0]) if ground_array.size == 1 else float("nan")
+        )
+    except (TypeError, ValueError):
+        ground_scalar = float("nan")
+    if np.isfinite(ground_scalar):
+        ground_node = int(ground_scalar)
+        if ground_node < 1 or ground_node > nodes.shape[0]:
+            raise ValueError(
+                f"Effective ground node {ground_node} is outside the imported mesh"
+            )
+        mesh.gnd_node_source = ground_node - 1
+    else:
+        mesh.gnd_node_source = None
     return mesh, payload

@@ -21,6 +21,7 @@ _EXPORT_MODULES = {
     "export_forward_csv": ".geometry_exchange",
     "load_forward_csv": ".geometry_exchange",
     "save_exchange_mat": ".geometry_exchange",
+    "source_cell_data_to_local": ".geometry_exchange",
     "validate_exchange_payload": ".geometry_exchange",
 }
 
@@ -36,6 +37,7 @@ __all__ = [
     "export_forward_csv",
     "load_forward_csv",
     "save_exchange_mat",
+    "source_cell_data_to_local",
     "validate_exchange_payload",
 ]
 

@@ -1,4 +1,4 @@
-"""EIT Forward Model based on the Complete Electrode Model (CEM)."""
+"""EIT forward model with native complete- and point-electrode formulations."""
 
 from __future__ import annotations
 
@@ -388,13 +388,13 @@ def _hash_scalar_array(values, scalar_dtype: np.dtype) -> str:
 
 
 class EITForwardModel:
-    """EIT Forward Model - Complete Electrode Model assembly and solve."""
+    """EIT forward model for native CEM and single-node PEM assembly."""
 
     def __init__(
         self,
         n_elec: int,
         pattern_config: PatternConfig,
-        z: np.ndarray,
+        z: np.ndarray | None,
         mesh: EITMesh,
         linear_backend: str = "petsc",
         backend_config: dict | LinearBackendConfig | None = None,
@@ -402,17 +402,33 @@ class EITForwardModel:
         cache_manager=None,
         performance_mode: str = "aggressive",
         potential_order: int = 1,
+        electrode_model: str = "cem",
     ):
         self.n_elec = n_elec
         self.scalar_dtype = petsc_scalar_dtype()
         self.is_complex = bool(np.issubdtype(self.scalar_dtype, np.complexfloating))
-        self.z = self._normalize_contact_impedance(z)
+        self.electrode_model = str(electrode_model or "cem").strip().lower()
+        if self.electrode_model not in {"cem", "pem"}:
+            raise ValueError("electrode_model must be 'cem' or 'pem'")
+        self.contact_impedance_applicable = self.electrode_model == "cem"
+        if self.contact_impedance_applicable:
+            self.contact_impedance_source = None
+            self.z = self._normalize_contact_impedance(z)
+        else:
+            self.contact_impedance_source = self._normalize_pem_contact_provenance(z)
+            self.z = np.full(
+                self.n_elec,
+                np.nan,
+                dtype=self._active_scalar_dtype(),
+            )
         try:
             self.potential_order = int(potential_order)
         except (TypeError, ValueError) as exc:
             raise ValueError("potential_order must be a positive integer") from exc
         if self.potential_order < 1:
             raise ValueError("potential_order must be >= 1")
+        if self.electrode_model == "pem" and self.potential_order != 1:
+            raise ValueError("Native PEM currently requires potential_order=1")
         if not isinstance(mesh, EITMesh):
             raise TypeError("EITForwardModel expects an EITMesh instance")
         self.eit_mesh = mesh
@@ -424,7 +440,7 @@ class EITForwardModel:
         )
 
         self._mpi_backend_info = self._assert_supported_mpi_runtime()
-        if self.z.size != self.n_elec:
+        if self.contact_impedance_applicable and self.z.size != self.n_elec:
             raise ValueError(
                 f"Contact impedance length ({self.z.size}) does not match electrode count ({self.n_elec})"
             )
@@ -441,6 +457,11 @@ class EITForwardModel:
                 "`nix develop .#complex-cuda` or `nix develop .#complex64-cuda` "
                 "for complex admittivity GPU CEM."
             )
+        if self.forward_backend == "cuda_structured" and self.electrode_model == "pem":
+            raise ValueError(
+                "Native PEM requires forward_backend='dolfinx'; "
+                "cuda_structured currently implements CEM only."
+            )
         if self.forward_backend == "cuda_structured" and self.potential_order != 1:
             raise ValueError(
                 "potential_order > 1 is supported by the DOLFINx forward backend; "
@@ -451,6 +472,15 @@ class EITForwardModel:
             if isinstance(backend_config, LinearBackendConfig)
             else LinearBackendConfig.from_dict(backend_config)
         )
+        if (
+            self.electrode_model == "pem"
+            and self._solver_token(self.backend_config.solver_preset)
+            in _COMPLEX_BLOCK_REAL_AMGX_PRESETS
+        ):
+            raise ValueError(
+                "complex_block_real_amgx is currently a CEM-only route; "
+                "use the standard DOLFINx PETSc/SciPy backend for native PEM."
+            )
         self.performance_mode = str(performance_mode).strip().lower()
         self.cache_manager = cache_manager
         self._last_cache_lookup: dict[str, str | bool] = {}
@@ -460,8 +490,16 @@ class EITForwardModel:
 
         self.facet_tags = mesh.facet_tags
         self.association_table = mesh.association_table
-        if self.facet_tags is None:
+        if self.electrode_model == "cem" and self.facet_tags is None:
             raise ValueError("EITMesh lacks electrode facet tags, cannot assemble CEM")
+        if self.electrode_model == "pem":
+            (
+                self.point_electrode_source_nodes,
+                self.ground_node_source,
+            ) = self._resolve_pem_source_metadata()
+        else:
+            self.point_electrode_source_nodes = np.empty(0, dtype=np.int64)
+            self.ground_node_source = None
 
         mesh_file = getattr(mesh, "mesh_file", None)
         mesh_content_hash = None
@@ -475,6 +513,9 @@ class EITForwardModel:
             pattern_config=deepcopy(pattern_config),
             potential_order=self.potential_order,
             scalar_dtype=self.scalar_dtype,
+            electrode_model=self.electrode_model,
+            point_node_ids=self.point_electrode_source_nodes,
+            ground_node=self.ground_node_source,
         )
         self._static_setup_lookup = {
             "hit": False,
@@ -493,6 +534,13 @@ class EITForwardModel:
         self._petsc_backend_info["potential_order"] = self.potential_order
         self._petsc_backend_info["potential_space_family"] = "Lagrange"
         self._petsc_backend_info["conductivity_order"] = 0
+        self._petsc_backend_info["electrode_model"] = self.electrode_model
+        self._petsc_backend_info["contact_impedance_applicable"] = bool(
+            self.contact_impedance_applicable
+        )
+        self._petsc_backend_info["electrode_projection"] = (
+            "none" if self.electrode_model == "pem" else "exact-surface-facets"
+        )
         self._petsc_backend_info.update(runtime_scalar_summary())
         self._petsc_backend_info["static_setup_lookup"] = dict(
             self._static_setup_lookup
@@ -532,22 +580,35 @@ class EITForwardModel:
             }
             return
 
-        self.ds_electrodes = create_ds_measure(self.mesh, self.facet_tags)
-        self.electrode_tags = self._resolve_electrode_tags()
-        self.electrode_boundary_measures = self._compute_electrode_boundary_measures()
         self.geometry_scale_to_m = float(pattern_config.geometry_scale_to_m)
         self.mesh_tdim = int(self.mesh.topology.dim)
         self.boundary_scale_to_m = self.geometry_scale_to_m ** max(
             1, self.mesh_tdim - 1
         )
-        self.electrode_lengths_m = resolve_electrode_lengths_m(
-            electrode_lengths_mesh=[
-                self.electrode_boundary_measures[tag] for tag in self.electrode_tags
-            ],
-            geometry_scale_to_m=self.boundary_scale_to_m,
-            electrode_length_m_override=pattern_config.electrode_length_m_override,
-            n_elec=self.n_elec,
-        )
+        if self.electrode_model == "pem":
+            if str(pattern_config.drive_mode).strip().lower() == "line_current_density":
+                raise ValueError(
+                    "Native PEM has no electrode boundary length; use "
+                    "drive_mode='total_current' (amperes) or 'normalized'."
+                )
+            self.ds_electrodes = None
+            self.electrode_tags = []
+            self.electrode_boundary_measures = {}
+            self.electrode_lengths_m = np.ones(self.n_elec, dtype=float)
+        else:
+            self.ds_electrodes = create_ds_measure(self.mesh, self.facet_tags)
+            self.electrode_tags = self._resolve_electrode_tags()
+            self.electrode_boundary_measures = (
+                self._compute_electrode_boundary_measures()
+            )
+            self.electrode_lengths_m = resolve_electrode_lengths_m(
+                electrode_lengths_mesh=[
+                    self.electrode_boundary_measures[tag] for tag in self.electrode_tags
+                ],
+                geometry_scale_to_m=self.boundary_scale_to_m,
+                electrode_length_m_override=pattern_config.electrode_length_m_override,
+                n_elec=self.n_elec,
+            )
         cached_pattern_config = deepcopy(pattern_config)
         self.pattern_manager = StimMeasPatternManager(
             cached_pattern_config,
@@ -560,7 +621,16 @@ class EITForwardModel:
         self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
-        self.M = self._assemble_electrode_matrix()
+        if self.electrode_model == "pem":
+            (
+                self.point_electrode_matrix,
+                self.ground_dof,
+            ) = self._build_point_electrode_matrix()
+            self.M = self._assemble_pem_auxiliary_matrix()
+        else:
+            self.point_electrode_matrix = None
+            self.ground_dof = -1
+            self.M = self._assemble_electrode_matrix()
 
         bundle = ForwardStaticSetupBundle(
             ds_electrodes=self.ds_electrodes,
@@ -575,6 +645,9 @@ class EITForwardModel:
             V_sigma=self.V_sigma,
             dofs=int(self.dofs),
             electrode_matrix=self.M,
+            electrode_model=self.electrode_model,
+            point_electrode_matrix=self.point_electrode_matrix,
+            ground_dof=int(self.ground_dof),
         )
         put_process_forward_setup_bundle(self._static_setup_cache_key, bundle)
         self._static_setup_lookup = {
@@ -602,6 +675,13 @@ class EITForwardModel:
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
         self.M = bundle.electrode_matrix
+        self.point_electrode_matrix = bundle.point_electrode_matrix
+        self.ground_dof = int(bundle.ground_dof)
+        if str(bundle.electrode_model) != self.electrode_model:
+            raise RuntimeError(
+                "Forward static setup cache electrode-model mismatch: "
+                f"{bundle.electrode_model!r} != {self.electrode_model!r}"
+            )
 
     def _active_scalar_dtype(self) -> np.dtype:
         """Return this model's PETSc scalar dtype, defaulting for unit stubs."""
@@ -638,6 +718,111 @@ class EITForwardModel:
         if np.any(np.isclose(np.abs(impedance), 0.0)):
             raise ValueError("contact impedance values must be non-zero")
         return np.ascontiguousarray(impedance, dtype=self._active_scalar_dtype())
+
+    def _normalize_pem_contact_provenance(
+        self, z: np.ndarray | None
+    ) -> np.ndarray | None:
+        if z is None:
+            return None
+        values = np.asarray(z).reshape(-1)
+        if values.size == 1:
+            values = np.full(self.n_elec, values[0], dtype=values.dtype)
+        if values.size != self.n_elec:
+            raise ValueError(
+                f"Contact impedance provenance length ({values.size}) does not "
+                f"match electrode count ({self.n_elec})"
+            )
+        return np.array(values, copy=True)
+
+    def _resolve_pem_source_metadata(self) -> tuple[np.ndarray, int]:
+        source_nodes = np.asarray(
+            getattr(self.eit_mesh, "point_electrode_source_nodes", []),
+            dtype=np.int64,
+        ).reshape(-1)
+        if source_nodes.size != self.n_elec:
+            raise ValueError(
+                "Native PEM requires point_electrode_source_nodes with exactly "
+                "one source vertex id per electrode"
+            )
+        if np.unique(source_nodes).size != source_nodes.size:
+            raise ValueError("Native PEM electrode source nodes must be unique")
+        ground_node = getattr(self.eit_mesh, "gnd_node_source", None)
+        if ground_node is None:
+            raise ValueError(
+                "Native PEM requires the exact EIDORS/PyEIDORS ground source node"
+            )
+        return np.ascontiguousarray(source_nodes), int(ground_node)
+
+    def _source_vertex_to_p1_dof(self, source_node: int, *, label: str) -> int:
+        self.mesh.topology.create_connectivity(0, self.mesh.topology.dim)
+        vertex_map = self.mesh.topology.index_map(0)
+        if vertex_map is None:
+            raise ValueError("Unable to access the DOLFINx vertex map for native PEM")
+        n_vertices = int(vertex_map.size_local + vertex_map.num_ghosts)
+        local_to_source = np.asarray(
+            self.mesh.geometry.input_global_indices,
+            dtype=np.int64,
+        ).reshape(-1)
+        matches = np.flatnonzero(local_to_source[:n_vertices] == int(source_node))
+        if matches.size != 1:
+            raise ValueError(
+                f"{label} source node {source_node + 1} maps to "
+                f"{matches.size} local vertices; expected exactly one"
+            )
+        dofs = np.asarray(
+            fem.locate_dofs_topological(
+                self.V,
+                0,
+                np.asarray([int(matches[0])], dtype=np.int32),
+            ),
+            dtype=np.int64,
+        ).reshape(-1)
+        if dofs.size != 1:
+            raise ValueError(
+                f"{label} source node {source_node + 1} maps to "
+                f"{dofs.size} P1 DOFs; expected exactly one"
+            )
+        return int(dofs[0])
+
+    def _build_point_electrode_matrix(self) -> tuple[csr_matrix, int]:
+        electrode_dofs = np.asarray(
+            [
+                self._source_vertex_to_p1_dof(
+                    int(source_node),
+                    label=f"PEM electrode {electrode_index + 1}",
+                )
+                for electrode_index, source_node in enumerate(
+                    self.point_electrode_source_nodes
+                )
+            ],
+            dtype=np.int32,
+        )
+        ground_dof = self._source_vertex_to_p1_dof(
+            int(self.ground_node_source),
+            label="PEM ground",
+        )
+        values = np.ones(self.n_elec, dtype=self._active_scalar_dtype())
+        matrix = csr_matrix(
+            (
+                values,
+                (np.arange(self.n_elec, dtype=np.int32), electrode_dofs),
+            ),
+            shape=(self.n_elec, self.dofs),
+            dtype=self._active_scalar_dtype(),
+        )
+        return matrix, ground_dof
+
+    def _assemble_pem_auxiliary_matrix(self) -> csr_matrix:
+        full_size = self.dofs + self.n_elec + 1
+        matrix = lil_matrix(
+            (full_size, full_size),
+            dtype=self._active_scalar_dtype(),
+        )
+        for electrode_index in range(self.n_elec):
+            row = self.dofs + electrode_index
+            matrix[row, row] = self._scalar_value(1.0)
+        matrix[full_size - 1, full_size - 1] = self._scalar_value(1.0)
+        return csr_matrix(matrix)
 
     @staticmethod
     def _solver_token(value: object, default: str = "auto") -> str:
@@ -1423,11 +1608,67 @@ class EITForwardModel:
             return mat
 
     def _apply_cuda_gauge_fix_rhs(self, rhs_matrix: np.ndarray) -> np.ndarray:
+        if getattr(self, "electrode_model", "cem") == "pem":
+            return self._prepare_pem_rhs(rhs_matrix)
         if not self._gpu_gauge_fix_enabled():
             return rhs_matrix
         constraint_row, _reference_col = self._cuda_gauge_rows()
         rhs_matrix[constraint_row, :] = self._scalar_value(0.0)
         return rhs_matrix
+
+    def _prepare_pem_rhs(self, rhs_matrix: np.ndarray) -> np.ndarray:
+        rhs = self._as_scalar_array(
+            rhs_matrix,
+            name="PEM rhs_matrix",
+            copy=True,
+        )
+        if rhs.ndim == 1:
+            rhs = rhs.reshape(-1, 1)
+        full_size = self.dofs + self.n_elec + 1
+        if rhs.shape[0] != full_size:
+            raise ValueError(
+                f"PEM RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
+            )
+        if not all_finite_values(rhs):
+            raise ValueError("PEM RHS must contain only finite values")
+
+        electrode_currents = rhs[
+            self.dofs : self.dofs + self.n_elec,
+            :,
+        ].copy()
+        current_scale = np.maximum(
+            1.0,
+            np.max(np.abs(electrode_currents), axis=0),
+        )
+        net_current = np.sum(electrode_currents, axis=0)
+        unbalanced = np.flatnonzero(np.abs(net_current) > 1e-10 * current_scale)
+        if unbalanced.size:
+            pattern = int(unbalanced[0])
+            raise ValueError(
+                "Native PEM requires balanced electrode currents; "
+                f"RHS column {pattern} has net current {net_current[pattern]!r}"
+            )
+
+        rhs[: self.dofs, :] += self.point_electrode_matrix.T @ electrode_currents
+        rhs[self.dofs : self.dofs + self.n_elec, :] = self._scalar_value(0.0)
+        rhs[self.dofs + self.n_elec, :] = self._scalar_value(0.0)
+        rhs[self.ground_dof, :] = self._scalar_value(0.0)
+        return rhs
+
+    def _finalize_pem_solution(self, sol_matrix: np.ndarray) -> np.ndarray:
+        if getattr(self, "electrode_model", "cem") != "pem":
+            return sol_matrix
+        solution = self._as_scalar_array(
+            sol_matrix,
+            name="PEM solution",
+            copy=True,
+        )
+        solution[
+            self.dofs : self.dofs + self.n_elec,
+            :,
+        ] = self.point_electrode_matrix @ solution[: self.dofs, :]
+        solution[self.dofs + self.n_elec, :] = self._scalar_value(0.0)
+        return solution
 
     def _recenter_cuda_gauge_solution(self, sol_matrix: np.ndarray) -> np.ndarray:
         if not self._gpu_gauge_fix_enabled():
@@ -1648,6 +1889,8 @@ class EITForwardModel:
     def _cuda_cem_requires_direct_solve(
         self, session: ForwardKSPSession, *, rhs_count: int = 1
     ) -> bool:
+        if getattr(self, "electrode_model", "cem") != "cem":
+            return False
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         if str(backend_info.get("petsc_device_effective", "cpu")) != "cuda":
             return False
@@ -1904,6 +2147,16 @@ class EITForwardModel:
     def _create_full_matrix_scipy(self, sigma: fem.Function) -> csr_matrix:
         """Build full system matrix for SciPy backend."""
         scipy_A = self._petsc_to_csr(self._assemble_conductivity_matrix(sigma))
+        if getattr(self, "electrode_model", "cem") == "pem":
+            grounded = scipy_A.tolil()
+            grounded[self.ground_dof, :] = self._scalar_value(0.0)
+            grounded[:, self.ground_dof] = self._scalar_value(0.0)
+            grounded[self.ground_dof, self.ground_dof] = self._scalar_value(1.0)
+            grounded.resize(
+                self.dofs + self.n_elec + 1,
+                self.dofs + self.n_elec + 1,
+            )
+            return grounded.tocsr() + self.M
         scipy_A.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
         return scipy_A + self._ensure_electrode_matrix()
 
@@ -2010,7 +2263,12 @@ class EITForwardModel:
         if PETSc is None:
             raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
         mat_kind = self._get_requested_petsc_mat_type()
-        if self._gpu_gauge_fix_enabled():
+        if getattr(self, "electrode_model", "cem") == "pem":
+            full_matrix = self._csr_to_petsc(self._create_full_matrix_scipy(sigma))
+            self._set_backend_diagnostic(
+                pem_constraint_strategy="exact-source-node-ground"
+            )
+        elif self._gpu_gauge_fix_enabled():
             scipy_full = self._create_full_matrix_scipy(sigma).tolil()
             constraint_row, reference_col = self._cuda_gauge_rows()
             scipy_full[constraint_row, :] = self._scalar_value(0.0)
@@ -2199,13 +2457,18 @@ class EITForwardModel:
         return {
             "backend": self.linear_backend,
             "forward_backend": self.forward_backend,
+            "electrode_model": str(getattr(self, "electrode_model", "cem")),
             "sigma_hash": sigma_hash,
             "scalar_dtype": str(self._active_scalar_dtype()),
             "scalar_is_complex": self._active_scalar_is_complex(),
             "n_elec": self.n_elec,
             "potential_order": int(getattr(self, "potential_order", 1)),
             "n_patterns": n_patterns,
-            "z_hash": _hash_scalar_array(self.z, self._active_scalar_dtype()),
+            "z_hash": (
+                _hash_scalar_array(self.z, self._active_scalar_dtype())
+                if getattr(self, "contact_impedance_applicable", True)
+                else "not-applicable"
+            ),
             "pattern_hash": _hash_scalar_array(
                 self.pattern_manager.stim_matrix,
                 self._active_scalar_dtype(),
@@ -2651,6 +2914,7 @@ class EITForwardModel:
                 petsc_backend.get("petsc_device_effective", "cpu")
             ),
             "potential_order": int(getattr(self, "potential_order", 1)),
+            "electrode_model": str(getattr(self, "electrode_model", "cem")),
             "scalar_dtype": str(self._active_scalar_dtype()),
             "scalar_is_complex": self._active_scalar_is_complex(),
             "dofs": int(getattr(self, "dofs", 0)),
@@ -3474,7 +3738,7 @@ class EITForwardModel:
         *,
         rhs_kind: str = "custom",
     ) -> np.ndarray:
-        """Solve the CEM system for arbitrary full RHS columns.
+        """Solve the active CEM/PEM system for arbitrary full RHS columns.
 
         This is the low-level hook used by matrix-free sensitivity actions:
         ``Jv`` has potential-space RHS columns, while ``J^T r`` can use
@@ -3491,13 +3755,23 @@ class EITForwardModel:
                 f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
             )
         if self.linear_backend == "scipy":
-            return self._solve_full_rhs_with_scipy(sigma, rhs, rhs_kind=rhs_kind)
-        if self.linear_backend == "petsc":
-            return self._solve_full_rhs_with_petsc(sigma, rhs, rhs_kind=rhs_kind)
-        raise ValueError(
-            f"Unsupported linear_backend: {self.linear_backend}. "
-            "Expected one of: 'petsc', 'scipy'."
-        )
+            solution = self._solve_full_rhs_with_scipy(
+                sigma,
+                rhs,
+                rhs_kind=rhs_kind,
+            )
+        elif self.linear_backend == "petsc":
+            solution = self._solve_full_rhs_with_petsc(
+                sigma,
+                rhs,
+                rhs_kind=rhs_kind,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported linear_backend: {self.linear_backend}. "
+                "Expected one of: 'petsc', 'scipy'."
+            )
+        return self._finalize_pem_solution(solution)
 
     def forward_solve(self, sigma: fem.Function, current_patterns=None):
         """Forward solve for given conductivity and stimulation patterns."""
@@ -3524,6 +3798,7 @@ class EITForwardModel:
                 f"Unsupported linear_backend: {self.linear_backend}. "
                 "Expected one of: 'petsc', 'scipy'."
             )
+        sol_matrix = self._finalize_pem_solution(sol_matrix)
 
         n_patterns = pattern_matrix.shape[0]
         potential_block = self._as_scalar_array(

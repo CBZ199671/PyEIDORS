@@ -302,7 +302,7 @@ def test_v743_missing_contact_impedance_is_preserved_and_blocks_forward(
         config.require_interop_forward_ready()
 
 
-def test_v743_point_electrode_projection_requires_explicit_opt_in(
+def test_v748_point_electrodes_route_to_native_pem_without_projection_opt_in(
     tmp_path: Path,
 ) -> None:
     root = _make_source_semantics_package(tmp_path, point_electrodes=True)
@@ -313,12 +313,86 @@ def test_v743_point_electrode_projection_requires_explicit_opt_in(
 
     assert report["valid"] is True
     assert report["electrode_models"] == ["point"] * 4
-    assert report["forward_ready"] is False
-    with pytest.raises(ValueError, match="point_or_distributed_point"):
-        config.require_interop_forward_ready()
-    config.with_overrides(
-        allow_interop_approximations=True
-    ).require_interop_forward_ready()
+    assert report["electrode_model"] == "pem"
+    assert report["electrode_projection"] == "none"
+    assert report["forward_ready"] is True
+    assert config.electrode_model == "pem"
+    assert config.drive_mode == "total_current"
+    assert config.potential_order == 1
+    assert config.interop_semantics["contact_impedance_applicable"] is False
+    assert config.interop_semantics["electrode_projection"] == "none"
+    config.require_interop_forward_ready()
+
+
+def test_v749_missing_point_contact_is_not_a_physical_pem_blocker(
+    tmp_path: Path,
+) -> None:
+    root = _make_source_semantics_package(
+        tmp_path,
+        point_electrodes=True,
+        missing_contact_impedance=True,
+    )
+
+    report = validate_bridge_package(root)
+    config = InteropBundleImporter().preview_package(root)[1].forward_model_config
+
+    assert report["contact_impedance_present"] == [False] * 4
+    assert (
+        "contact_impedance_missing_no_eidors_default" not in report["forward_blockers"]
+    )
+    assert config.contact_impedance is None
+    assert config.electrode_model == "pem"
+    config.require_interop_forward_ready()
+
+
+def test_v749_pem_export_uses_singleton_nodes_and_labeled_eidors_placeholder() -> None:
+    nodes = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int64)
+    facets = np.array(
+        [[1, 2, 3], [1, 2, 4], [1, 3, 4], [2, 3, 4]],
+        dtype=np.int64,
+    )
+    stim, meas = _custom_protocol()
+    config = ForwardModelConfig(
+        mesh_dimension=3,
+        n_elec=4,
+        electrode_model="pem",
+        measurement_protocol="custom",
+        custom_stim_matrix=stim,
+        custom_meas_matrices=meas,
+        drive_mode="total_current",
+        contact_impedance=None,
+        interop_semantics={"effective_gnd_node": 2},
+    )
+
+    payload = build_geometry_payload_from_result(
+        node_coords=nodes,
+        cell_connectivity=cells,
+        forward_model_config=config,
+        boundary_facets=facets,
+        electrode_nodes=np.arange(4, dtype=np.int64),
+        electrode_node_counts=np.ones(4, dtype=np.int64),
+    )
+    metadata = json.loads(str(payload["capture_metadata_json"]))
+
+    assert payload["electrode_model"] == ["point"] * 4
+    np.testing.assert_array_equal(payload["electrode_node_counts"], [1, 1, 1, 1])
+    np.testing.assert_array_equal(payload["electrode_nodes"], [[1], [2], [3], [4]])
+    assert float(payload["contact_impedance"]) == 1.0
+    assert bool(payload["contact_impedance_applicable"]) is False
+    assert bool(payload["contact_impedance_physical_present"]) is False
+    assert int(payload["effective_gnd_node"]) == 2
+    assert (
+        metadata["fields"]["contact_impedance"]["status"]
+        == "eidors_structural_placeholder_not_used_by_pem"
+    )
 
 
 def test_v745_nonuniform_background_is_preserved_without_scalar_inference(

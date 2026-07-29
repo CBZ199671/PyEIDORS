@@ -80,6 +80,25 @@ def test_density_closure_warns_near_tolerance(eit_mesh):
     assert item.passed is True
 
 
+def test_v749_pem_unit_check_does_not_treat_placeholder_lengths_as_physical(
+    eit_mesh,
+):
+    model = _build_forward_model(eit_mesh, drive_mode="total_current")
+    model.electrode_model = "pem"
+    model.electrode_lengths_m = np.full(model.n_elec, np.nan)
+
+    report = run_unit_consistency_checks(model)
+
+    item = next(
+        item
+        for item in report.items
+        if item.name == "electrode_length_physical_consistency"
+    )
+    assert item.passed is True
+    assert item.details == {"electrode_model": "pem"}
+    assert "Not applicable" in item.message
+
+
 def test_system_run_unit_precheck_respects_strict_flag(eit_mesh):
     pattern = PatternConfig(
         n_elec=16,

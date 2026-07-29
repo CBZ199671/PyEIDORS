@@ -78,6 +78,7 @@ def _forward_smoke(mesh: Any, config: Any) -> dict[str, Any]:
     system = EITSystem(
         n_elec=config.total_electrodes(),
         pattern_config=pattern,
+        electrode_model=config.electrode_model,
         contact_impedance=config.contact_impedance,
         base_conductivity=config.background_conductivity,
         potential_order=config.potential_order,
@@ -114,6 +115,7 @@ def _cmd_import_geometry(args: argparse.Namespace) -> int:
         "n_elements": mesh.num_cells(),
         "n_boundary_facets": int(mesh.facet_tags.indices.size),
         "n_electrodes": int(mesh.n_electrodes),
+        "electrode_model": str(getattr(mesh, "electrode_model", "unknown")),
         "electrode_projection": str(getattr(mesh, "electrode_projection", "unknown")),
         "source_electrode_models": list(getattr(mesh, "source_electrode_models", [])),
     }
@@ -200,8 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-point-electrode-projection",
         action="store_true",
         help=(
-            "Explicitly accept the non-equivalent point/distributed-point to "
-            "incident-boundary-facet approximation for --forward-smoke."
+            "Backward-compatible flag that explicitly accepts only the "
+            "distributed-point to incident-boundary-facet approximation. "
+            "Single-node PEM runs natively and does not require this flag."
         ),
     )
     import_parser.set_defaults(handler=_cmd_import_geometry)

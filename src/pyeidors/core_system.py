@@ -303,6 +303,7 @@ class EITSystem(CoreSystemFacadeMixin):
         cache_lifecycle: str | None = None,
         cache_policy: Optional[CachePolicy] = None,
         cem_formulation: str = "classic",
+        electrode_model: str = "cem",
         **kwargs,
     ) -> None:
         _ = kwargs
@@ -316,11 +317,18 @@ class EITSystem(CoreSystemFacadeMixin):
             geometry_scale_to_m=1.0,
         )
         self.mesh_config = mesh_config or MeshConfig(radius=1.0, refinement=8)
-        self.contact_impedance = _real_or_complex_vector(
-            contact_impedance,
-            size=n_elec,
-            default=0.01,
-            name="contact_impedance",
+        self.electrode_model = str(electrode_model or "cem").strip().lower()
+        if self.electrode_model not in {"cem", "pem"}:
+            raise ValueError("electrode_model must be 'cem' or 'pem'")
+        self.contact_impedance = (
+            None
+            if self.electrode_model == "pem" and contact_impedance is None
+            else _real_or_complex_vector(
+                contact_impedance,
+                size=n_elec,
+                default=0.01,
+                name="contact_impedance",
+            )
         )
 
         self.base_conductivity = _real_or_complex_scalar(
@@ -909,6 +917,30 @@ class EITSystem(CoreSystemFacadeMixin):
             getattr(self, "cem_formulation", "classic")
         )
         self.cem_formulation = cem_formulation
+        self.electrode_model = (
+            str(getattr(self, "electrode_model", "cem") or "cem").strip().lower()
+        )
+        mesh_electrode_model = (
+            str(
+                getattr(self.mesh, "electrode_model", self.electrode_model)
+                or self.electrode_model
+            )
+            .strip()
+            .lower()
+        )
+        if mesh_electrode_model != self.electrode_model:
+            raise ValueError(
+                "Forward configuration electrode_model does not match mesh "
+                f"semantics: {self.electrode_model!r} != {mesh_electrode_model!r}"
+            )
+        if (
+            self.electrode_model == "pem"
+            and cem_formulation == ROBIN_TRANSCONDUCTANCE_CEM
+        ):
+            raise ValueError(
+                "cem_formulation='robin_transconductance' is CEM-only; "
+                "native PEM uses electrode_model='pem' with the classic FEM core."
+            )
         forward_model_class = (
             RobinTransconductanceForwardModel
             if cem_formulation == ROBIN_TRANSCONDUCTANCE_CEM
@@ -925,12 +957,15 @@ class EITSystem(CoreSystemFacadeMixin):
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
             potential_order=potential_order,
+            electrode_model=self.electrode_model,
         )
         self.fwd_model._set_backend_diagnostic(
             **self._pattern_config_diagnostics,
             **runtime_policy,
             cem_formulation_requested=self.cem_formulation,
             cem_formulation_effective=self.cem_formulation,
+            electrode_model_requested=self.electrode_model,
+            electrode_model_effective=self.electrode_model,
         )
         if not initialize_inverse:
             self.reconstructor = None

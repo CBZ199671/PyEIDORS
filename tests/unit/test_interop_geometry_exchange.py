@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from scipy.io import loadmat
 
-from pyeidors.data.structures import EITMesh
+from pyeidors.data.structures import EITImage, EITMesh
 import pyeidors.interop.geometry_exchange as geometry_exchange_module
 from pyeidors.interop import (
     LEGACY_INTEROP_FORMAT,
@@ -242,21 +242,105 @@ def test_v735_build_3d_tetrahedron_mesh_from_geometry_v2(tmp_path: Path) -> None
     )
 
 
-def test_v740_point_electrodes_expand_to_unique_incident_facets(
+def test_v747_point_electrodes_preserve_exact_nodes_without_facet_projection(
     tmp_path: Path,
 ) -> None:
     payload = make_standard_payload()
+    source_background = np.array([10.0, 20.0])
+    source_target = np.array([30.0, 40.0])
+    payload["background_elem_data"] = source_background
+    payload["target_elem_data"] = source_target
     payload["electrode_nodes"] = np.array([1, 2, 3, 4], dtype=np.int64)
     payload["electrode_node_counts"] = np.ones(4, dtype=np.int64)
+    payload["electrode_model"] = ["point"] * 4
+    payload["effective_gnd_node"] = 1
     out_mat = tmp_path / "point_electrodes.mat"
     save_exchange_mat(out_mat, payload)
 
-    mesh, _ = build_mesh_from_exchange_mat(out_mat)
+    mesh, imported = build_mesh_from_exchange_mat(out_mat)
 
-    assert mesh.electrode_projection == "incident_boundary_facets"
+    assert mesh.electrode_model == "pem"
+    assert mesh.electrode_projection == "none"
+    assert mesh.gnd_node_source == 0
+    np.testing.assert_array_equal(mesh.point_electrode_source_nodes, [0, 1, 2, 3])
+    np.testing.assert_array_equal(
+        imported["background_elem_data"],
+        source_background[mesh.source_cell_indices],
+    )
+    np.testing.assert_array_equal(
+        imported["target_elem_data"],
+        source_target[mesh.source_cell_indices],
+    )
+    np.testing.assert_array_equal(
+        imported["truth_elem_data"],
+        np.asarray(payload["truth_elem_data"])[mesh.source_cell_indices],
+    )
+    assert imported["element_data_order"] == "dolfinx_local"
+    electrode_nodes, electrode_counts = build_electrode_arrays(mesh)
+    np.testing.assert_array_equal(electrode_nodes, [[1], [2], [3], [4]])
+    np.testing.assert_array_equal(electrode_counts, [1, 1, 1, 1])
     for electrode in range(1, 5):
         tag = mesh.association_table[f"electrode_{electrode}"]
-        assert np.count_nonzero(mesh.facet_tags.values == tag) >= 1
+        assert np.count_nonzero(mesh.facet_tags.values == tag) == 0
+
+
+def test_v747_native_pem_uses_exact_node_currents_and_ignores_contact_impedance(
+    tmp_path: Path,
+) -> None:
+    from pyeidors import EITSystem
+    from pyeidors.data import PatternConfig
+
+    payload = make_standard_payload()
+    payload["electrode_nodes"] = np.array([1, 2, 3, 4], dtype=np.int64)
+    payload["electrode_node_counts"] = np.ones(4, dtype=np.int64)
+    payload["electrode_model"] = ["point"] * 4
+    payload["effective_gnd_node"] = 1
+    out_mat = tmp_path / "native_pem.mat"
+    save_exchange_mat(out_mat, payload)
+    mesh, _ = build_mesh_from_exchange_mat(out_mat)
+
+    stim = np.array([[0.0, 1.0, -1.0, 0.0]])
+    meas = [np.array([[1.0, 0.0, -1.0, 0.0]])]
+    pattern = PatternConfig(
+        n_elec=4,
+        measurement_protocol="custom",
+        custom_stim_matrix=stim,
+        custom_meas_matrices=meas,
+        drive_mode="total_current",
+    )
+
+    electrode_voltages = []
+    for contact_impedance in (None, np.full(4, 1e9)):
+        system = EITSystem(
+            n_elec=4,
+            pattern_config=pattern,
+            electrode_model="pem",
+            contact_impedance=contact_impedance,
+            linear_backend="scipy",
+            forward_backend="dolfinx",
+        )
+        system.setup(mesh=mesh, initialize_inverse=False)
+        data, voltages = system.fwd_model.fwd_solve(
+            EITImage(
+                elem_data=np.ones(mesh.num_cells()),
+                fwd_model=system.fwd_model,
+            )
+        )
+        assert system.fwd_model.contact_impedance_applicable is False
+        assert system.fwd_model.ground_dof >= 0
+        assert system.fwd_model.point_electrode_matrix.shape == (4, 4)
+        np.testing.assert_allclose(
+            data.meas,
+            system.fwd_model.pattern_manager.apply_meas_pattern(voltages),
+        )
+        electrode_voltages.append(voltages)
+
+    np.testing.assert_allclose(
+        electrode_voltages[0],
+        electrode_voltages[1],
+        rtol=0,
+        atol=0,
+    )
 
 
 def test_v743_legacy_distributed_point_sets_require_projection(

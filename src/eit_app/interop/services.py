@@ -207,6 +207,36 @@ def _interop_semantics_from_geometry(
     warnings = [
         str(item) for item in semantics.get("forward_warnings", []) if str(item)
     ]
+    legacy_projection_blocker = (
+        "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
+    )
+    blockers = [item for item in blockers if item != legacy_projection_blocker]
+
+    source_models = source_electrode_models(geometry)
+    if source_models and all(model == "point" for model in source_models):
+        electrode_model = "pem"
+        contact_impedance_applicable = False
+        electrode_projection = "none"
+    elif source_models and all(
+        model in {"cem", "cem_faces"} for model in source_models
+    ):
+        electrode_model = "cem"
+        contact_impedance_applicable = True
+        electrode_projection = "exact_surface_nodes"
+    elif source_models and all(model == "distributed_point" for model in source_models):
+        electrode_model = "cem"
+        contact_impedance_applicable = True
+        electrode_projection = "incident_boundary_facets"
+        blocker = "distributed_point_electrode_requires_explicit_projection_opt_in"
+        if blocker not in blockers:
+            blockers.append(blocker)
+    else:
+        electrode_model = "cem"
+        contact_impedance_applicable = True
+        electrode_projection = "unsupported_mixed"
+        blocker = "mixed_cem_pem_electrode_models_not_supported"
+        if blocker not in blockers:
+            blockers.append(blocker)
 
     contact_present = np.asarray(
         geometry.get("contact_impedance_present", np.ones(n_elec, dtype=bool)),
@@ -214,10 +244,13 @@ def _interop_semantics_from_geometry(
     ).reshape(-1)
     if contact_present.size == 1:
         contact_present = np.full(n_elec, bool(contact_present[0]), dtype=bool)
-    if contact_present.size != n_elec or not np.all(contact_present):
-        blocker = "contact_impedance_missing_no_eidors_default"
-        if blocker not in blockers:
-            blockers.append(blocker)
+    contact_missing = contact_present.size != n_elec or not np.all(contact_present)
+    contact_blocker = "contact_impedance_missing_no_eidors_default"
+    if contact_missing and contact_impedance_applicable:
+        if contact_blocker not in blockers:
+            blockers.append(contact_blocker)
+    elif not contact_impedance_applicable:
+        blockers = [item for item in blockers if item != contact_blocker]
 
     background_present = _mat_scalar_bool(
         geometry.get("background_present"),
@@ -237,14 +270,6 @@ def _interop_semantics_from_geometry(
         if blocker not in blockers:
             blockers.append(blocker)
 
-    source_models = source_electrode_models(geometry)
-    if any(model in {"point", "distributed_point"} for model in source_models):
-        blocker = (
-            "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
-        )
-        if blocker not in blockers:
-            blockers.append(blocker)
-
     if "stimulation_supported" in geometry and not _mat_scalar_bool(
         geometry["stimulation_supported"],
         default=False,
@@ -259,6 +284,29 @@ def _interop_semantics_from_geometry(
             np.asarray(geometry.get("source_framework", "unknown")).reshape(-1)[0]
         ),
         "source_electrode_models": source_models,
+        "source_electrode_model_class": (
+            "point"
+            if all(model == "point" for model in source_models)
+            else (
+                "cem"
+                if all(model in {"cem", "cem_faces"} for model in source_models)
+                else (
+                    "distributed_point"
+                    if all(model == "distributed_point" for model in source_models)
+                    else "mixed"
+                )
+            )
+        ),
+        "electrode_model": electrode_model,
+        "electrode_projection": electrode_projection,
+        "contact_impedance_applicable": contact_impedance_applicable,
+        "effective_gnd_node": (
+            int(np.asarray(geometry["effective_gnd_node"]).reshape(-1)[0])
+            if "effective_gnd_node" in geometry
+            and np.asarray(geometry["effective_gnd_node"]).size == 1
+            and np.isfinite(np.asarray(geometry["effective_gnd_node"]).reshape(-1)[0])
+            else None
+        ),
         "forward_blockers": blockers,
         "forward_warnings": warnings,
         "forward_ready": not blockers,
@@ -308,6 +356,7 @@ def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConf
             {
                 "n_elec": n_elec,
                 "n_rings": 1,
+                "electrode_model": semantics["electrode_model"],
                 "contact_impedance": _normalize_contact_impedance(
                     geometry.get("contact_impedance"),
                     presence=geometry.get("contact_impedance_present"),
@@ -315,6 +364,13 @@ def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConf
                 "interop_semantics": semantics,
             }
         )
+        if semantics["electrode_model"] == "pem":
+            overrides.update(
+                {
+                    "drive_mode": "total_current",
+                    "potential_order": 1,
+                }
+            )
         if _mat_scalar_bool(geometry.get("background_present"), default=True):
             background = np.asarray(geometry.get("background", [])).reshape(-1)
             if background.size == 1 and np.isfinite(background[0]):
@@ -548,6 +604,14 @@ def build_geometry_payload_from_result(
     )
     if boundary_facets is not None and int(np.min(boundary_entities, initial=1)) < 1:
         boundary_entities = boundary_entities + 1
+    electrode_model = str(forward_model_config.electrode_model).strip().lower()
+    if electrode_model == "pem" and (
+        electrode_nodes is None or electrode_node_counts is None
+    ):
+        raise ValueError(
+            "PEM export requires exact singleton electrode_nodes from the "
+            "forward mesh; surface-electrode inference is not permitted."
+        )
     if electrode_nodes is None or electrode_node_counts is None:
         electrode_nodes, electrode_counts = _infer_electrode_node_groups(
             nodes,
@@ -560,8 +624,13 @@ def build_geometry_payload_from_result(
             electrode_node_counts,
             dtype=np.int64,
         ).reshape(-1)
-        if electrode_nodes.ndim == 1 and electrode_counts.size == 1:
-            electrode_nodes = electrode_nodes.reshape(1, -1)
+        if electrode_nodes.ndim == 1:
+            if electrode_counts.size == 1:
+                electrode_nodes = electrode_nodes.reshape(1, -1)
+            elif electrode_nodes.size == electrode_counts.size and np.all(
+                electrode_counts == 1
+            ):
+                electrode_nodes = electrode_nodes.reshape(-1, 1)
         if (
             electrode_nodes.ndim != 2
             or electrode_nodes.shape[0] != electrode_counts.size
@@ -580,6 +649,12 @@ def build_geometry_payload_from_result(
                 electrode_nodes = electrode_nodes.copy()
                 for index, count in enumerate(electrode_counts):
                     electrode_nodes[index, : int(count)] += 1
+    if electrode_model == "pem" and (
+        electrode_counts.size == 0 or np.any(electrode_counts != 1)
+    ):
+        raise ValueError(
+            "PEM export requires exactly one source node for every electrode"
+        )
     if truth_elem_data is None:
         truth_elem = np.full(
             elems.shape[0],
@@ -597,7 +672,17 @@ def build_geometry_payload_from_result(
         else background
     )
     configured_impedance = forward_model_config.contact_impedance
-    if configured_impedance is None:
+    if electrode_model == "pem" and configured_impedance is None:
+        effective_impedance = 1.0
+        impedance_status = "eidors_structural_placeholder_not_used_by_pem"
+    elif electrode_model == "pem":
+        effective_impedance = (
+            configured_impedance
+            if isinstance(configured_impedance, (int, float, complex))
+            else np.asarray(configured_impedance)
+        )
+        impedance_status = "source_value_preserved_but_not_used_by_pem"
+    elif configured_impedance is None:
         effective_impedance: float | complex | np.ndarray = 0.01
         impedance_status = "pyeidors_runtime_default"
     elif isinstance(configured_impedance, (int, float, complex)):
@@ -609,6 +694,15 @@ def build_geometry_payload_from_result(
     contact_unit = (
         "ohm*mesh_coordinate_unit" if dimension == 2 else "ohm*mesh_coordinate_unit^2"
     )
+    total_electrodes = forward_model_config.n_elec * max(
+        forward_model_config.n_rings, 1
+    )
+    source_gnd_node = forward_model_config.interop_semantics.get("effective_gnd_node")
+    effective_gnd_node = (
+        int(source_gnd_node)
+        if source_gnd_node is not None and int(source_gnd_node) > 0
+        else 1
+    )
     export_semantics = {
         "schema": "eidors_pyeidors_capture_semantics_v1",
         "source_framework": "pyeidors",
@@ -616,6 +710,7 @@ def build_geometry_payload_from_result(
             "contact_impedance": {
                 "status": impedance_status,
                 "effective_value_exported": True,
+                "applicable": electrode_model == "cem",
             },
             "background_image": {
                 "status": "exact_config",
@@ -635,10 +730,8 @@ def build_geometry_payload_from_result(
             },
         },
         "electrode_models": [
-            "cem"
-            for _ in range(
-                forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
-            )
+            "point" if electrode_model == "pem" else "cem"
+            for _ in range(total_electrodes)
         ],
         "forward_ready": True,
         "forward_blockers": [],
@@ -658,9 +751,7 @@ def build_geometry_payload_from_result(
         "boundary_facets": boundary_entities,
         "electrode_nodes": electrode_nodes,
         "electrode_node_counts": electrode_counts,
-        "n_elec": int(
-            forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
-        ),
+        "n_elec": int(total_electrodes),
         "background": background_value,
         "background_present": True,
         "background_elem_data": np.full(elems.shape[0], background_value),
@@ -670,6 +761,10 @@ def build_geometry_payload_from_result(
         "target_elem_data": truth_elem,
         "contact_impedance": effective_impedance,
         "contact_impedance_present": True,
+        "contact_impedance_applicable": electrode_model == "cem",
+        "contact_impedance_physical_present": bool(
+            electrode_model == "cem" and configured_impedance is not None
+        ),
         "contact_impedance_unit": contact_unit,
         "electrode_model": export_semantics["electrode_models"],
         "electrode_projection_required": np.zeros(
@@ -680,8 +775,12 @@ def build_geometry_payload_from_result(
         "geometry_scale_to_m": float(forward_model_config.geometry_scale_to_m),
         "gnd_node": np.nan,
         "gnd_node_present": False,
-        "effective_gnd_node": 1,
-        "effective_gnd_node_source": "pyeidors_export_gauge_choice",
+        "effective_gnd_node": effective_gnd_node,
+        "effective_gnd_node_source": (
+            "preserved_eidors_effective_gnd_node"
+            if source_gnd_node is not None
+            else "pyeidors_export_gauge_choice"
+        ),
         "normalize_measurements": False,
         "normalize_measurements_present": True,
         "normalize_measurements_source": "pyeidors_forward_unnormalized",
@@ -1130,6 +1229,7 @@ class InteropSmokeValidator:
         system = EITSystem(
             n_elec=config.total_electrodes(),
             pattern_config=pattern,
+            electrode_model=config.electrode_model,
             contact_impedance=config.contact_impedance,
             base_conductivity=config.background_conductivity,
             regularization_alpha=float(preset.regularization_alpha),

@@ -70,6 +70,35 @@ forward_finite = ~isempty(data_check.meas) && ...
     all(isfinite(imag(data_check.meas(:))));
 forward_count_exact = numel(data_check.meas) == n_measurements;
 
+is_pem = false;
+if isfield(payload, 'electrode_model')
+    source_models = local_model_strings(payload.electrode_model);
+    is_pem = ~isempty(source_models) && all(strcmp(source_models, 'point'));
+end
+pem_singleton_exact = ~is_pem || all(double(payload.electrode_node_counts(:)) == 1);
+pem_no_projection = ~is_pem || ( ...
+    isfield(payload, 'electrode_projection_required') && ...
+    ~any(logical(payload.electrode_projection_required(:))));
+pem_contact_marked_not_applicable = ~is_pem || ( ...
+    isfield(payload, 'contact_impedance_applicable') && ...
+    ~logical(payload.contact_impedance_applicable));
+pem_z_contact_invariant = true;
+pem_z_contact_max_abs = 0;
+if is_pem
+    original_z = arrayfun(@(electrode) electrode.z_contact, fmdl.electrode);
+    for i = 1:numel(fmdl.electrode)
+        fmdl.electrode(i).z_contact = 1e9 + i;
+    end
+    data_changed_z = fwd_solve(mk_image(fmdl, double(payload.background)));
+    pem_z_contact_max_abs = max(abs( ...
+        data_changed_z.meas(:) - data_check.meas(:)), [], 'all');
+    pem_z_contact_invariant = pem_z_contact_max_abs <= ...
+        1e-12 * max(1, max(abs(data_check.meas(:)), [], 'all'));
+    for i = 1:numel(fmdl.electrode)
+        fmdl.electrode(i).z_contact = original_z(i);
+    end
+end
+
 report = struct();
 report.schema = 'eidors_bridge_import_acceptance_v1';
 report.status = 'passed';
@@ -86,10 +115,23 @@ report.electrodes_exact = logical(electrodes_exact);
 report.protocol_exact = logical(protocol_exact);
 report.forward_finite = logical(forward_finite);
 report.forward_count_exact = logical(forward_count_exact);
+if is_pem
+    report.electrode_model = 'pem';
+else
+    report.electrode_model = 'cem';
+end
+report.pem_singleton_exact = logical(pem_singleton_exact);
+report.pem_no_projection = logical(pem_no_projection);
+report.pem_contact_marked_not_applicable = ...
+    logical(pem_contact_marked_not_applicable);
+report.pem_z_contact_invariant = logical(pem_z_contact_invariant);
+report.pem_z_contact_max_abs = double(pem_z_contact_max_abs);
 report.eidors_version = eidors_obj('eidors_version');
 
 passed = boundary_exact && electrodes_exact && protocol_exact && ...
-    forward_finite && forward_count_exact;
+    forward_finite && forward_count_exact && pem_singleton_exact && ...
+    pem_no_projection && pem_contact_marked_not_applicable && ...
+    pem_z_contact_invariant;
 if ~passed
     report.status = 'failed';
 end
@@ -108,4 +150,21 @@ fprintf('EIDORS Bridge acceptance: %s (%d nodes, %d elements, %d measurements)\n
 if ~passed
     error('EIDORS Bridge acceptance checks failed. See %s', report_path);
 end
+end
+
+function models = local_model_strings(raw_models)
+if iscell(raw_models)
+    models = cellstr(string(raw_models(:)));
+elseif isstring(raw_models)
+    models = cellstr(raw_models(:));
+elseif ischar(raw_models)
+    if size(raw_models, 1) == 1
+        models = {strtrim(raw_models)};
+    else
+        models = cellstr(strtrim(raw_models));
+    end
+else
+    models = cellstr(string(raw_models(:)));
+end
+models = cellfun(@strtrim, models, UniformOutput=false);
 end

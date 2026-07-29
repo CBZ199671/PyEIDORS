@@ -1,7 +1,7 @@
 # EIDORS ↔ PyEIDORS source-semantics acceptance
 
 Date: 2026-07-30
-Result: **PASS (24/24 checks)**
+Result: **PASS (28/28 checks)**
 
 Runtime:
 
@@ -27,7 +27,7 @@ nix develop .#complex64-cuda --command \
 | --- | --- | --- | --- | --- | --- |
 | 2D CEM | `mk_common_model('c2C2',16)` | 313 nodes, 576 triangles | 16 exact surface CEM | 208 measurements | finite forward PASS |
 | 3D CEM | `ng_mk_cyl_models` | 1117 nodes, 4506 tetrahedra | 8 exact surface CEM | 40 measurements | finite forward PASS |
-| 3D PEM | `mk_common_model('a3cr',16)` | 205 nodes, 768 tetrahedra | 16 one-node PEM | 208 measurements | default BLOCK; explicit incident-facet projection PASS |
+| 3D PEM | `mk_common_model('a3cr',16)` | 205 nodes, 768 tetrahedra | 16 exact one-node PEM, no projection | 208 measurements | native PEM forward PASS |
 | Missing fields | `mk_common_model('c2C2',8)` | 313 nodes, 576 triangles | 8 surface CEM | 40 measurements | geometry PASS; equivalent forward BLOCK |
 
 Verified source semantics:
@@ -38,9 +38,16 @@ Verified source semantics:
 - PEM background resistivity `0.5 Ω·source-unit` mapped by EIDORS to
   conductivity `2.0`.
 - PEM target first-element resistivity `0.25` mapped to conductivity `4.0`.
-- PEM forward without opt-in returned the expected
-  `point_or_distributed_point_electrode_requires_explicit_projection_opt_in`
-  blocker.
+- Native PyEIDORS PEM uses the exact EIDORS source vertices for injection and
+  measurement (`Q=N2EᵀI`, `U=N2E·u`) without incident-facet projection.
+- EIDORS versus PyEIDORS relative L2 was `4.9174e-7` for the homogeneous field
+  and `4.7870e-7` for the heterogeneous target.
+- DOLFINx source-cell reordering was applied automatically through
+  `topology.original_cell_index`; source element 0 was local element 182 in
+  this real fixture.
+- Changing every PEM `z_contact` to approximately `1e9` changed both PyEIDORS
+  forward vectors by exactly zero. Contact impedance is therefore preserved
+  only as provenance/required EIDORS structure, not used in PEM physics.
 - Missing-field case preserved all eight absent `z_contact` values as
   `NaN` with `contact_impedance_present=false`.
 - Missing `gnd_node` recorded the standard first-order center-node runtime
@@ -57,16 +64,20 @@ Verified source semantics:
 
 ## PyEIDORS → EIDORS
 
-A native PyEIDORS 3D package was rebuilt and solved by the same real
+A native PyEIDORS PEM package, using a labeled finite structural
+`z_contact` placeholder, was rebuilt and solved by the same real
 MATLAB/EIDORS installation:
 
 | Check | Result |
 | --- | --- |
-| Geometry | 1425 nodes, 6215 tetrahedra |
-| Boundary | 320 facets, exact |
-| Electrodes | 8, exact |
+| Geometry | 205 nodes, 768 tetrahedra |
+| Boundary | 256 facets, exact |
+| Electrodes | 16 exact singleton-node PEM electrodes |
 | Stimulation/measurement matrices | exact |
-| Measurements | 40 |
+| Measurements | 208 |
+| Electrode projection | none |
+| Contact impedance applicability | false |
+| EIDORS z-invariance check | exact (`max_abs=0`) |
 | Forward values finite | PASS |
 | Forward measurement count exact | PASS |
 
@@ -75,18 +86,20 @@ The reverse acceptance report returned
 
 ## Repository gates
 
-- Ruff format and lint: PASS (717 Python files checked).
+- Ruff format and lint: PASS (716 Python files checked).
 - Full unit suite without coverage enforcement: PASS
-  (2099 passed, 394 skipped).
-- The default coverage run had the same 2099 passed and 394 skipped with no
-  test failures, but the repository-wide total was `85.88%`, below the
-  existing `87%` gate. The uncovered lines are distributed across existing
-  CUDA, CLI, realtime, and experimental modules and were not disguised by
-  adding out-of-scope tests.
+  (2103 passed, 450 skipped).
+- The first default coverage run exposed 32 legacy bare/mock CEM fixtures that
+  lacked the new model attributes; after restoring the CEM defaults, all 70
+  affected PETSc/KSP branch tests passed. That first run also reported the
+  pre-existing repository-wide coverage debt (`85.24% < 87%`); no out-of-scope
+  tests were added to disguise it.
 
 ## Claim boundary
 
-This gate proves deterministic model discovery, field provenance, geometry,
-electrode, conductivity, stimulation/measurement transfer, and executable
-forward paths for the declared cases. It does not claim arbitrary custom
-MATLAB solver portability or inverse-reconstruction numerical parity.
+This gate proves deterministic model discovery, field provenance, exact PEM
+source-node and source-cell transfer, geometry, conductivity,
+stimulation/measurement identity, native forward numerical parity, and
+bidirectional PEM execution for the declared cases. It does not claim
+arbitrary custom MATLAB solver portability or inverse-reconstruction
+numerical parity.

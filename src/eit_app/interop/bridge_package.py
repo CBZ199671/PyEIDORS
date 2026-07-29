@@ -519,6 +519,27 @@ def validate_bridge_package(path: str | Path) -> dict[str, Any]:
                 warnings.append("capture_metadata_json could not be decoded.")
     electrode_models = source_electrode_models(geometry)
     report["electrode_models"] = electrode_models
+    all_point_electrodes = bool(
+        electrode_models and all(model == "point" for model in electrode_models)
+    )
+    all_cem_electrodes = bool(
+        electrode_models
+        and all(model in {"cem", "cem_faces"} for model in electrode_models)
+    )
+    report["electrode_model"] = (
+        "pem"
+        if all_point_electrodes
+        else ("cem" if all_cem_electrodes else "mixed_or_distributed")
+    )
+    report["electrode_projection"] = (
+        "none"
+        if all_point_electrodes
+        else (
+            "exact_surface_nodes"
+            if all_cem_electrodes
+            else "unsupported_or_approximate"
+        )
+    )
     if electrode_models:
         report["electrode_definition"] = (
             "point_or_distributed_point"
@@ -571,8 +592,13 @@ def validate_bridge_package(path: str | Path) -> dict[str, Any]:
             report[report_name] = json_ready(
                 np.asarray(geometry[source_name]).reshape(-1)
             )
-    blockers = [str(item) for item in metadata.get("forward_blockers", []) if str(item)]
-    if not np.all(contact_present):
+    blockers = [
+        str(item)
+        for item in metadata.get("forward_blockers", [])
+        if str(item)
+        != "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
+    ]
+    if not np.all(contact_present) and not all_point_electrodes:
         blockers.append("contact_impedance_missing_no_eidors_default")
     if not report["background_present"]:
         background_elem_present = bool(
@@ -589,12 +615,16 @@ def validate_bridge_package(path: str | Path) -> dict[str, Any]:
             if background_elem_present and background_elem_data.size
             else "background_image_missing_or_unmappable"
         )
-    if report["electrode_definition"] == "point_or_lower_dimensional" or any(
-        model in {"point", "distributed_point"} for model in electrode_models
-    ):
+    if any(model == "distributed_point" for model in electrode_models):
         blockers.append(
-            "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
+            "distributed_point_electrode_requires_explicit_projection_opt_in"
         )
+    if (
+        not all_point_electrodes
+        and not all_cem_electrodes
+        and not all(model == "distributed_point" for model in electrode_models)
+    ):
+        blockers.append("mixed_cem_pem_electrode_models_not_supported")
     if report["stimulation_supported"] is False:
         blockers.append(
             "stimulation_missing_or_unsupported_voltage_interior_complex_pattern"

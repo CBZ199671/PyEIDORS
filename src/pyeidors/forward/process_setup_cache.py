@@ -40,6 +40,9 @@ class ForwardStaticSetupBundle:
     V_sigma: Any
     dofs: int
     electrode_matrix: csr_matrix
+    electrode_model: str = "cem"
+    point_electrode_matrix: csr_matrix | None = None
+    ground_dof: int = -1
 
 
 _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS = 8
@@ -66,6 +69,8 @@ def _csr_nbytes(matrix: csr_matrix) -> int:
 def _forward_setup_bundle_size_bytes(bundle: ForwardStaticSetupBundle) -> int:
     total = _array_nbytes(bundle.electrode_lengths_m)
     total += _csr_nbytes(bundle.electrode_matrix)
+    if bundle.point_electrode_matrix is not None:
+        total += _csr_nbytes(bundle.point_electrode_matrix)
     return max(int(total), 1)
 
 
@@ -91,11 +96,14 @@ def build_process_forward_setup_key(
     *,
     mesh_file: str | None,
     n_elec: int,
-    z: np.ndarray,
+    z: np.ndarray | None,
     pattern_config: PatternConfig,
     mesh_content_hash: str | None = None,
     potential_order: int = 1,
     scalar_dtype: str | np.dtype | None = None,
+    electrode_model: str = "cem",
+    point_node_ids: np.ndarray | None = None,
+    ground_node: int | None = None,
 ) -> str:
     """Build a content-addressed cache key for forward static setup.
 
@@ -112,26 +120,45 @@ def build_process_forward_setup_key(
             "build_process_forward_setup_key requires either mesh_file "
             "or mesh_content_hash to form a stable cache key."
         )
+    model = str(electrode_model or "cem").strip().lower()
+    if model not in {"cem", "pem"}:
+        raise ValueError("electrode_model must be 'cem' or 'pem'")
     z_dtype = (
         np.dtype(scalar_dtype)
         if scalar_dtype is not None
         else np.dtype(np.complex128 if np.iscomplexobj(z) else np.float64)
     )
-    z_array = np.asarray(z)
-    if not np.issubdtype(z_dtype, np.complexfloating) and np.iscomplexobj(z_array):
-        if has_nonzero_imaginary(z_array):
-            raise RuntimeError(
-                "complex contact impedance requires a complex PETSc/DOLFINx "
-                "runtime; use nix develop .#complex or .#complex64"
+    if model == "cem":
+        z_array = np.asarray(z)
+        if not np.issubdtype(z_dtype, np.complexfloating) and np.iscomplexobj(z_array):
+            if has_nonzero_imaginary(z_array):
+                raise RuntimeError(
+                    "complex contact impedance requires a complex PETSc/DOLFINx "
+                    "runtime; use nix develop .#complex or .#complex64"
+                )
+            z_array = np.real(z_array)
+        z_hash = hash_array(np.asarray(z_array, dtype=z_dtype).reshape(-1))
+        point_node_hash = "not-applicable"
+        ground_node_value = None
+    else:
+        point_nodes = np.asarray(point_node_ids, dtype=np.int64).reshape(-1)
+        if point_nodes.size != int(n_elec):
+            raise ValueError(
+                "PEM static setup requires one exact source node per electrode"
             )
-        z_array = np.real(z_array)
+        z_hash = "not-applicable"
+        point_node_hash = hash_array(point_nodes)
+        ground_node_value = int(ground_node) if ground_node is not None else None
     payload = {
         "mesh_file": file_token,
         "mesh_content_hash": content_token,
         "n_elec": int(n_elec),
+        "electrode_model": model,
         "potential_order": int(potential_order),
         "scalar_dtype": str(z_dtype),
-        "z_hash": hash_array(np.asarray(z_array, dtype=z_dtype).reshape(-1)),
+        "z_hash": z_hash,
+        "point_node_hash": point_node_hash,
+        "ground_node": ground_node_value,
         "pattern_config": _pattern_signature(pattern_config),
     }
     return hash_json_payload(payload)

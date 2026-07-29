@@ -177,35 +177,47 @@ def run_unit_consistency_checks(
         )
 
     # 3) Electrode length consistency
-    lengths = np.asarray(fwd_model.electrode_lengths_m, dtype=float).reshape(-1)
-    lengths_ok = bool(
-        lengths.size == n_elec
-        and all_finite_values(lengths)
-        and float(np.min(lengths, initial=np.inf)) > 0.0
-    )
-    if lengths_ok:
+    electrode_model = str(getattr(fwd_model, "electrode_model", "cem")).lower()
+    if electrode_model == "pem":
         report.items.append(
             UnitCheckItem(
                 name="electrode_length_physical_consistency",
                 level=UnitCheckLevel.INFO,
                 passed=True,
-                message="Electrode physical lengths are positive and complete.",
-                details={
-                    "min_length_m": float(lengths.min()),
-                    "max_length_m": float(lengths.max()),
-                },
+                message="Not applicable: PEM electrodes are source mesh vertices.",
+                details={"electrode_model": "pem"},
             )
         )
     else:
-        report.items.append(
-            UnitCheckItem(
-                name="electrode_length_physical_consistency",
-                level=UnitCheckLevel.ERROR,
-                passed=False,
-                message="Electrode physical lengths are invalid or incomplete.",
-                details={"n_lengths": int(lengths.size), "n_elec": n_elec},
-            )
+        lengths = np.asarray(fwd_model.electrode_lengths_m, dtype=float).reshape(-1)
+        lengths_ok = bool(
+            lengths.size == n_elec
+            and all_finite_values(lengths)
+            and float(np.min(lengths, initial=np.inf)) > 0.0
         )
+        if lengths_ok:
+            report.items.append(
+                UnitCheckItem(
+                    name="electrode_length_physical_consistency",
+                    level=UnitCheckLevel.INFO,
+                    passed=True,
+                    message="Electrode physical lengths are positive and complete.",
+                    details={
+                        "min_length_m": float(lengths.min()),
+                        "max_length_m": float(lengths.max()),
+                    },
+                )
+            )
+        else:
+            report.items.append(
+                UnitCheckItem(
+                    name="electrode_length_physical_consistency",
+                    level=UnitCheckLevel.ERROR,
+                    passed=False,
+                    message="Electrode physical lengths are invalid or incomplete.",
+                    details={"n_lengths": int(lengths.size), "n_elec": n_elec},
+                )
+            )
 
     # 4) Current conservation
     stim = np.asarray(fwd_model.pattern_manager.stim_matrix, dtype=float)

@@ -741,10 +741,16 @@ def _create_forward_system(
     return EITSystem(
         n_elec=total_electrodes,
         pattern_config=pattern,
-        contact_impedance=_contact_impedance_vector(
-            forward_cfg.contact_impedance,
-            total_electrodes=total_electrodes,
+        contact_impedance=(
+            None
+            if forward_cfg.electrode_model == "pem"
+            and forward_cfg.contact_impedance is None
+            else _contact_impedance_vector(
+                forward_cfg.contact_impedance,
+                total_electrodes=total_electrodes,
+            )
         ),
+        electrode_model=forward_cfg.electrode_model,
         base_conductivity=forward_cfg.background_conductivity,
         solver_mode=runtime["solver_mode"],
         line_search_mode=runtime["line_search_mode"],
