@@ -11,26 +11,28 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
-BENCHMARK_SCRIPT_DIR = REPO_ROOT / "scripts" / "benchmarks"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
-if str(BENCHMARK_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(BENCHMARK_SCRIPT_DIR))
 
+from _bridge_case_contract import (
+    PYEIDORS_REFINEMENTS,
+    real_vector,
+    SCENARIO_CONFIG,
+)
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.data.synthetic_data import create_custom_phantom
+from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.interop import (
     STANDARD_INTEROP_FORMAT,
+    build_boundary_facets,
     build_boundary_edges,
     build_electrode_arrays,
     export_forward_csv,
     save_exchange_mat,
 )
-
-from benchmark_reviewer_case import PYEIDORS_REFINEMENTS, SCENARIO_CONFIG
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,7 +83,7 @@ def main() -> None:
         regularization_alpha=1.0,
         noser_exponent=0.5,
     )
-    system.setup(mesh=mesh, initialize_default_reconstructor=False)
+    system.setup(mesh=mesh)
 
     baseline_image = system.create_homogeneous_image(conductivity=cfg["background"])
     sigma = create_custom_phantom(
@@ -95,12 +97,19 @@ def main() -> None:
             }
         ],
     )
-    truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=system.fwd_model)
+    truth_image = EITImage(
+        elem_data=function_get_array(sigma).copy(),
+        fwd_model=system.fwd_model,
+    )
 
     baseline_data = system.forward_solve(baseline_image)
     phantom_data = system.forward_solve(truth_image)
-    baseline = np.asarray(baseline_data.meas, dtype=float).reshape(-1)
-    phantom = np.asarray(phantom_data.meas, dtype=float).reshape(-1)
+    baseline = real_vector(baseline_data.meas, name="baseline measurements")
+    phantom = real_vector(phantom_data.meas, name="phantom measurements")
+    truth_elem_data = real_vector(
+        truth_image.elem_data,
+        name="truth conductivity",
+    )
 
     if args.forward_export_csv is not None:
         export_forward_csv(args.forward_export_csv, baseline, phantom)
@@ -108,19 +117,26 @@ def main() -> None:
     nodes = np.asarray(mesh.coordinates(), dtype=float)
     elems = np.asarray(mesh.cells(), dtype=np.int64) + 1
     boundary_edges = build_boundary_edges(mesh)
+    boundary_facets = build_boundary_facets(mesh)
     electrode_nodes, electrode_counts = build_electrode_arrays(mesh)
 
     payload = {
         "exchange_format": STANDARD_INTEROP_FORMAT,
+        "schema_version": 2,
+        "index_base": 1,
         "source_framework": "pyeidors",
+        "dimension": 2,
+        "cell_type": "triangle",
+        "boundary_entity_type": "edge",
         "nodes": nodes,
         "elems": elems,
         "boundary_edges": boundary_edges,
+        "boundary_facets": boundary_facets,
         "electrode_nodes": electrode_nodes,
         "electrode_node_counts": electrode_counts,
         "n_elec": int(args.n_elec),
         "background": float(cfg["background"]),
-        "truth_elem_data": np.asarray(truth_image.elem_data, dtype=float).reshape(-1),
+        "truth_elem_data": truth_elem_data,
         "contact_impedance": float(cfg["contact_impedance"]),
         "mesh_level": args.mesh_level,
         "scenario_name": args.scenario,

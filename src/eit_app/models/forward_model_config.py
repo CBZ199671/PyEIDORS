@@ -195,6 +195,8 @@ def _parse_custom_pattern_payload(value: Any) -> dict[str, Any]:
 class ForwardModelConfig:
     """Portable forward-model configuration across Hardware / Simulation / Dataset."""
 
+    mesh_source: str = "generated"
+    mesh_path: str = ""
     mesh_dimension: int = 2
     mesh_refinement: float = 0.1
     potential_order: int = 1
@@ -249,6 +251,10 @@ class ForwardModelConfig:
     notes: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.mesh_source = str(self.mesh_source or "generated").strip().lower()
+        if self.mesh_source not in {"generated", "interop"}:
+            raise ValueError("mesh_source must be 'generated' or 'interop'")
+        self.mesh_path = str(self.mesh_path or "").strip()
         self.mesh_dimension = int(self.mesh_dimension)
         self.potential_order = max(1, int(self.potential_order))
         self.drive_mode = drive_mode_for_mesh_dimension(
@@ -289,6 +295,8 @@ class ForwardModelConfig:
         layout = measurement_layout_from_config(raw)
 
         return cls(
+            mesh_source=str(raw.get("mesh_source", "generated")),
+            mesh_path=str(raw.get("mesh_path", "")),
             mesh_dimension=mesh_dimension,
             mesh_refinement=float(
                 raw.get("mesh_refinement", raw.get("mesh_size", 0.1))
@@ -377,6 +385,8 @@ class ForwardModelConfig:
 
     def to_mapping(self) -> dict[str, Any]:
         return {
+            "mesh_source": self.mesh_source,
+            "mesh_path": self.mesh_path,
             "mesh_dimension": int(self.mesh_dimension),
             "mesh_refinement": float(self.mesh_refinement),
             "potential_order": int(self.potential_order),

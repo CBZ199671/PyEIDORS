@@ -254,6 +254,11 @@ def write_forward_result(path: str | Path, result: ForwardSolverResult) -> None:
         "forward_model_config": _encode_json_value(result.forward_model_config),
         "error_msg": result.error_msg,
         "has_homogeneous_voltages": result.homogeneous_voltages is not None,
+        "has_boundary_facets": result.boundary_facets is not None,
+        "has_electrode_nodes": (
+            result.electrode_nodes is not None
+            and result.electrode_node_counts is not None
+        ),
     }
     with h5py.File(path, "w") as handle:
         handle.attrs["schema"] = _FORWARD_RESULT_SCHEMA
@@ -268,6 +273,18 @@ def write_forward_result(path: str | Path, result: ForwardSolverResult) -> None:
         _write_dataset(handle, "cell_connectivity", result.cell_connectivity)
         if result.homogeneous_voltages is not None:
             _write_dataset(handle, "homogeneous_voltages", result.homogeneous_voltages)
+        if result.boundary_facets is not None:
+            _write_dataset(handle, "boundary_facets", result.boundary_facets)
+        if (
+            result.electrode_nodes is not None
+            and result.electrode_node_counts is not None
+        ):
+            _write_dataset(handle, "electrode_nodes", result.electrode_nodes)
+            _write_dataset(
+                handle,
+                "electrode_node_counts",
+                result.electrode_node_counts,
+            )
 
 
 def read_forward_result(path: str | Path) -> ForwardSolverResult:
@@ -281,6 +298,23 @@ def read_forward_result(path: str | Path) -> ForwardSolverResult:
             if has_homogeneous and "homogeneous_voltages" in data
             else None
         )
+        boundary_facets = (
+            _read_dataset_array(data["boundary_facets"])
+            if bool(metadata.get("has_boundary_facets", False))
+            and "boundary_facets" in data
+            else None
+        )
+        has_electrode_nodes = bool(metadata.get("has_electrode_nodes", False))
+        electrode_nodes = (
+            _read_dataset_array(data["electrode_nodes"])
+            if has_electrode_nodes and "electrode_nodes" in data
+            else None
+        )
+        electrode_node_counts = (
+            _read_dataset_array(data["electrode_node_counts"])
+            if has_electrode_nodes and "electrode_node_counts" in data
+            else None
+        )
         return ForwardSolverResult(
             boundary_voltages=_read_dataset_array(data["boundary_voltages"]),
             ground_truth_conductivity=_read_dataset_array(
@@ -291,6 +325,9 @@ def read_forward_result(path: str | Path) -> ForwardSolverResult:
             n_elements=int(metadata["n_elements"]),
             n_measurements=int(metadata["n_measurements"]),
             homogeneous_voltages=homogeneous,
+            boundary_facets=boundary_facets,
+            electrode_nodes=electrode_nodes,
+            electrode_node_counts=electrode_node_counts,
             forward_model_config=dict(metadata.get("forward_model_config") or {}),
             error_msg=metadata.get("error_msg"),
         )

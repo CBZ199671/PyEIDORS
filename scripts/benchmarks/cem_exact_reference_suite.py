@@ -33,7 +33,7 @@ for source_path in (ROOT, SRC):
 
 from pyeidors.forward import EITForwardModel
 from pyeidors.interop.geometry_exchange import (
-    STANDARD_INTEROP_FORMAT,
+    LEGACY_INTEROP_FORMAT,
     build_mesh_from_exchange_mat,
     save_exchange_mat,
 )
@@ -518,7 +518,7 @@ def prepare_case_fixture(output_dir: Path, case: ExactCase) -> dict[str, Any]:
     msh_path = common_dir / "cem_exact_common_p1.msh"
     metadata_path = common_dir / "cem_exact_common_p1.json"
     payload = {
-        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "exchange_format": LEGACY_INTEROP_FORMAT,
         "source_framework": "exact_rational_circular_fixture",
         "nodes": nodes,
         "elems": cells + 1,

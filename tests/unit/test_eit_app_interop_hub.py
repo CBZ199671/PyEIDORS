@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,11 @@ from eit_app.interop.matlab_templates import (
     CAPTURE_SCRIPT_TEMPLATE,
     RUN_IN_EIDORS_TEMPLATE,
 )
-from eit_app.interop.services import EidorsBridgeRunner
+from eit_app.interop.services import EidorsBridgeRunner, InteropSmokeValidator
+from eit_app.interop.environment import (
+    _guess_host_os_from_path,
+    matlab_runtime_path,
+)
 from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 import eit_app.ui.path_explorer as path_explorer_module
@@ -201,6 +206,15 @@ def test_interop_hub_can_preview_and_import_into_simulation(
     sim_cfg = window._sim_tab.mesh_setup_panel.get_config()
     assert sim_cfg["n_electrodes"] == 8
     assert window._sim_forward_model_config.n_elec == 8
+    imported_cfg = window._current_sim_forward_model_config()
+    assert imported_cfg.mesh_source == "interop"
+    assert Path(imported_cfg.mesh_path) == (bridge_dir / "geometry.mat").resolve()
+    request = window._build_sim_forward_request(request_source="interop_test")
+    assert request.forward_model_config["mesh_source"] == "interop"
+    assert (
+        Path(request.forward_model_config["mesh_path"])
+        == (bridge_dir / "geometry.mat").resolve()
+    )
     assert window._tab_widget.currentWidget() is window._sim_tab
 
     dialog.close()
@@ -594,6 +608,29 @@ def test_v129_matlab_bridge_templates_match_real_eidors_roundtrip() -> None:
     assert "mk_common_gridmdl('backproj')" not in RUN_IN_EIDORS_TEMPLATE
     assert "pyeidors_bridge_homogeneous" in RUN_IN_EIDORS_TEMPLATE
     assert "EIDORS bridge measurements loaded" in RUN_IN_EIDORS_TEMPLATE
+
+
+def test_v734_wsl_mounted_matlab_executable_uses_windows_runtime_paths() -> None:
+    env = EidorsEnvironment(
+        name="WSL-mounted Windows MATLAB",
+        matlab_command="/mnt/d/Program Files/MATLAB/R2023b/bin/matlab.exe",
+    )
+
+    assert _guess_host_os_from_path(env.matlab_command) == "windows"
+    assert (
+        matlab_runtime_path(
+            "/mnt/d/eidors/eidors/startup.m",
+            env,
+        )
+        == r"D:\eidors\eidors\startup.m"
+    )
+
+
+def test_v733_smoke_validator_counts_complex_conductivity_without_real_cast() -> None:
+    source = inspect.getsource(InteropSmokeValidator.validate)
+
+    assert 'getattr(recon, "conductivity", np.asarray([]))' in source
+    assert 'getattr(recon, "conductivity", np.asarray([])), dtype=float' not in source
 
 
 def test_v129_bridge_runner_uses_tolerant_matlab_output_capture(

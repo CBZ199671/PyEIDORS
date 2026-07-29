@@ -496,6 +496,7 @@ For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
 
 ## Documentation
 
+- **EIDORS ↔ PyEIDORS 2D/3D Migration**: `docs/EIDORS_PYEIDORS_INTEROP.md`
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Branching Policy**: `docs/BRANCHING_POLICY.md`
 - **Nix (FEniCSx) Setup**: `docs/NIX_FENICSX.md`

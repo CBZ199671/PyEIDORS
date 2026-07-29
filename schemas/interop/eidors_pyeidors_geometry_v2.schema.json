@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyeidors.org/schemas/eidors_pyeidors_geometry_v2.schema.json",
+  "title": "Logical field contract for geometry.mat (Geometry v2)",
+  "description": "Array shapes are validated by pyeidors.interop.validate_exchange_payload; this schema documents scalar metadata and required MAT variable names.",
+  "type": "object",
+  "required": [
+    "exchange_format",
+    "schema_version",
+    "index_base",
+    "source_framework",
+    "dimension",
+    "cell_type",
+    "boundary_entity_type",
+    "nodes",
+    "elems",
+    "boundary_facets",
+    "electrode_nodes",
+    "electrode_node_counts",
+    "n_elec",
+    "background",
+    "truth_elem_data",
+    "contact_impedance",
+    "mesh_name",
+    "mesh_level",
+    "scenario_name"
+  ],
+  "properties": {
+    "exchange_format": {
+      "const": "eidors_pyeidors_geometry_v2"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "index_base": {
+      "const": 1
+    },
+    "source_framework": {
+      "enum": [
+        "eidors",
+        "pyeidors"
+      ]
+    },
+    "dimension": {
+      "enum": [
+        2,
+        3
+      ]
+    },
+    "cell_type": {
+      "enum": [
+        "triangle",
+        "tetrahedron"
+      ]
+    },
+    "boundary_entity_type": {
+      "enum": [
+        "edge",
+        "triangle"
+      ]
+    },
+    "nodes": {},
+    "elems": {},
+    "boundary_facets": {},
+    "boundary_edges": {},
+    "electrode_nodes": {},
+    "electrode_node_counts": {},
+    "n_elec": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "background": {},
+    "truth_elem_data": {},
+    "contact_impedance": {},
+    "mesh_name": {},
+    "mesh_level": {},
+    "scenario_name": {},
+    "stim_matrix": {},
+    "meas_matrices": {},
+    "measurement_counts": {},
+    "normalize_measurements": {}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dimension": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "cell_type": {
+            "const": "triangle"
+          },
+          "boundary_entity_type": {
+            "const": "edge"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dimension": {
+            "const": 3
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "cell_type": {
+            "const": "tetrahedron"
+          },
+          "boundary_entity_type": {
+            "const": "triangle"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

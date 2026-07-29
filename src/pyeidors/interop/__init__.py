@@ -10,7 +10,11 @@ from importlib import import_module
 from typing import Any
 
 _EXPORT_MODULES = {
+    "LEGACY_INTEROP_FORMAT": ".geometry_exchange",
     "STANDARD_INTEROP_FORMAT": ".geometry_exchange",
+    "STANDARD_INTEROP_FORMAT_V2": ".geometry_exchange",
+    "SUPPORTED_INTEROP_FORMATS": ".geometry_exchange",
+    "build_boundary_facets": ".geometry_exchange",
     "build_boundary_edges": ".geometry_exchange",
     "build_electrode_arrays": ".geometry_exchange",
     "build_mesh_from_exchange_mat": ".geometry_exchange",
@@ -21,7 +25,11 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
+    "LEGACY_INTEROP_FORMAT",
     "STANDARD_INTEROP_FORMAT",
+    "STANDARD_INTEROP_FORMAT_V2",
+    "SUPPORTED_INTEROP_FORMATS",
+    "build_boundary_facets",
     "build_boundary_edges",
     "build_electrode_arrays",
     "build_mesh_from_exchange_mat",

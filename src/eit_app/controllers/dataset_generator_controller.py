@@ -16,6 +16,7 @@ from eit_app.controllers.forward_solver_controller import (
     _forward_measurement_values,
     _paint_shape,
     _resolve_forward_runtime,
+    _setup_generated_forward_system,
     _total_electrode_count,
 )
 from eit_app.io.hdf5_packages import (
@@ -120,19 +121,10 @@ class _DatasetGeneratorWorker(QObject):
                 potential_order=forward_cfg.potential_order,
                 acceleration_profile=runtime["acceleration_profile"],
             )
-            system.setup(
-                mesh_source="generated",
-                dimension=forward_cfg.mesh_dimension,
-                mesh_size=forward_cfg.mesh_refinement,
-                radius=forward_cfg.radius,
-                height=forward_cfg.height,
-                electrode_coverage=forward_cfg.electrode_coverage,
-                electrode_height_ratio=forward_cfg.electrode_height_ratio,
-                electrode_level_fractions=forward_cfg.electrode_level_fractions,
-                z_center=forward_cfg.z_center,
-                mesh_family=runtime["mesh_family"],
-                geometry_version=forward_cfg.geometry_version,
-                electrode_layout=forward_cfg.electrode_layout,
+            _setup_generated_forward_system(
+                system,
+                forward_cfg=forward_cfg,
+                runtime=runtime,
             )
 
             mesh = system.mesh if system.mesh is not None else system.fwd_model.mesh

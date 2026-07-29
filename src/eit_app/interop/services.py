@@ -152,19 +152,98 @@ def _normalize_contact_impedance(value: Any) -> float | list[float] | None:
 
 
 def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConfig:
-    if loaded.forward_model_config is not None:
-        return loaded.forward_model_config
     geometry = loaded.geometry_payload or {}
     nodes = np.asarray(geometry.get("nodes", np.zeros((0, 2))), dtype=float)
-    return ForwardModelConfig.from_mapping(
-        {
-            "mesh_dimension": 3 if nodes.ndim == 2 and nodes.shape[1] >= 3 else 2,
-            "n_elec": int(np.asarray(geometry.get("n_elec", 16)).reshape(-1)[0]),
-            "contact_impedance": _normalize_contact_impedance(
-                geometry.get("contact_impedance")
-            ),
-        }
-    )
+    base = loaded.forward_model_config or ForwardModelConfig()
+    overrides: dict[str, Any] = {}
+    if nodes.ndim == 2 and nodes.shape[0] and nodes.shape[1] in {2, 3}:
+        dimension = int(nodes.shape[1])
+        bounds_min = np.min(nodes, axis=0)
+        bounds_max = np.max(nodes, axis=0)
+        center = 0.5 * (bounds_min + bounds_max)
+        overrides.update(
+            {
+                "mesh_source": "interop",
+                "mesh_path": str(
+                    Path(base.mesh_path).resolve()
+                    if base.mesh_path
+                    else (loaded.root / GEOMETRY_NAME).resolve()
+                ),
+                "mesh_dimension": dimension,
+                "mesh_family": "triangle" if dimension == 2 else "tetrahedron",
+                "geometry_version": "interop-v2",
+                "radius": float(
+                    np.max(np.linalg.norm(nodes[:, :2] - center[:2], axis=1))
+                ),
+            }
+        )
+        if dimension == 3:
+            overrides.update(
+                {
+                    "height": float(bounds_max[2] - bounds_min[2]),
+                    "z_center": float(center[2]),
+                }
+            )
+    if geometry:
+        overrides.update(
+            {
+                "n_elec": int(
+                    np.asarray(geometry.get("n_elec", base.n_elec)).reshape(-1)[0]
+                ),
+                "n_rings": 1,
+                "contact_impedance": _normalize_contact_impedance(
+                    geometry.get("contact_impedance")
+                ),
+            }
+        )
+    custom_patterns = _custom_patterns_from_geometry(geometry)
+    if custom_patterns is not None:
+        stim_matrix, meas_matrices = custom_patterns
+        overrides.update(
+            {
+                "measurement_protocol": "custom",
+                "custom_stim_matrix": stim_matrix,
+                "custom_meas_matrices": meas_matrices,
+            }
+        )
+    return base.with_overrides(**overrides)
+
+
+def _custom_patterns_from_geometry(
+    geometry: dict[str, Any],
+) -> tuple[np.ndarray, list[np.ndarray]] | None:
+    if "stim_matrix" not in geometry or "meas_matrices" not in geometry:
+        return None
+    stim_matrix = np.asarray(geometry["stim_matrix"], dtype=float)
+    if stim_matrix.size == 0:
+        return None
+    if stim_matrix.ndim == 1:
+        stim_matrix = stim_matrix.reshape(1, -1)
+    if stim_matrix.ndim != 2 or stim_matrix.shape[0] == 0:
+        raise ValueError("'stim_matrix' must have shape (n_stim, n_elec)")
+
+    counts = np.asarray(
+        geometry.get("measurement_counts", []),
+        dtype=np.int64,
+    ).reshape(-1)
+    if counts.size != stim_matrix.shape[0]:
+        raise ValueError("'measurement_counts' must have one entry per stimulation")
+    raw = np.asarray(geometry["meas_matrices"], dtype=float)
+    if stim_matrix.shape[0] == 1 and raw.ndim == 2:
+        raw = raw.reshape(1, *raw.shape)
+    elif raw.ndim == 2 and raw.shape == stim_matrix.shape and np.all(counts == 1):
+        raw = raw.reshape(stim_matrix.shape[0], 1, stim_matrix.shape[1])
+    if raw.ndim != 3 or raw.shape[0] != stim_matrix.shape[0]:
+        raise ValueError("'meas_matrices' must have shape (n_stim, max_n_meas, n_elec)")
+    matrices: list[np.ndarray] = []
+    for stim_index, count in enumerate(counts):
+        n_meas = int(count)
+        if n_meas <= 0 or n_meas > raw.shape[1]:
+            raise ValueError(
+                "Each measurement count must be positive and fit meas_matrices"
+            )
+        matrices.append(np.asarray(raw[stim_index, :n_meas, :], dtype=float))
+    return stim_matrix, matrices
 
 
 def _build_preview(loaded: LoadedBridgePackage) -> EidorsImportPreview:
@@ -299,48 +378,162 @@ def build_geometry_payload_from_result(
     source_framework: str = "pyeidors",
     mesh_name: str = "pyeidors_export",
     scenario_name: str = "bridge_export",
+    boundary_facets: np.ndarray | None = None,
+    electrode_nodes: np.ndarray | None = None,
+    electrode_node_counts: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Build a standard-ish geometry payload from a simulation result."""
+    """Build a Geometry v2 payload from a simulation result."""
 
     nodes = np.asarray(node_coords, dtype=float)
+    if nodes.ndim != 2 or nodes.shape[1] not in {2, 3}:
+        raise ValueError("Geometry export requires 2D or 3D node coordinates")
+    dimension = int(nodes.shape[1])
     elems = np.asarray(cell_connectivity, dtype=np.int64) + 1
-    boundary_entities = _boundary_entities_from_cells(cell_connectivity)
-    electrode_nodes, electrode_counts = _infer_electrode_node_groups(
-        nodes,
-        boundary_entities,
-        forward_model_config.n_elec * max(forward_model_config.n_rings, 1),
+    if elems.ndim != 2 or elems.shape[1] != dimension + 1:
+        raise ValueError("Geometry export supports only 2D triangles or 3D tetrahedra")
+    boundary_entities = (
+        np.asarray(boundary_facets, dtype=np.int64)
+        if boundary_facets is not None
+        else _boundary_entities_from_cells(cell_connectivity)
     )
+    if boundary_facets is not None and int(np.min(boundary_entities, initial=1)) < 1:
+        boundary_entities = boundary_entities + 1
+    if electrode_nodes is None or electrode_node_counts is None:
+        electrode_nodes, electrode_counts = _infer_electrode_node_groups(
+            nodes,
+            boundary_entities,
+            forward_model_config.n_elec * max(forward_model_config.n_rings, 1),
+        )
+    else:
+        electrode_nodes = np.asarray(electrode_nodes, dtype=np.int64)
+        electrode_counts = np.asarray(
+            electrode_node_counts,
+            dtype=np.int64,
+        ).reshape(-1)
+        if electrode_nodes.ndim == 1 and electrode_counts.size == 1:
+            electrode_nodes = electrode_nodes.reshape(1, -1)
+        if (
+            electrode_nodes.ndim != 2
+            or electrode_nodes.shape[0] != electrode_counts.size
+        ):
+            raise ValueError(
+                "Exact electrode nodes must have one padded row per electrode"
+            )
+        active_node_ids = [
+            electrode_nodes[index, : int(count)]
+            for index, count in enumerate(electrode_counts)
+            if int(count) > 0
+        ]
+        if active_node_ids:
+            active_node_ids_flat = np.concatenate(active_node_ids)
+            if int(np.min(active_node_ids_flat, initial=1)) == 0:
+                electrode_nodes = electrode_nodes.copy()
+                for index, count in enumerate(electrode_counts):
+                    electrode_nodes[index, : int(count)] += 1
     if truth_elem_data is None:
         truth_elem = np.full(
             elems.shape[0],
-            float(background or forward_model_config.background_conductivity),
+            (
+                forward_model_config.background_conductivity
+                if background is None
+                else background
+            ),
         )
     else:
-        truth_elem = np.asarray(truth_elem_data, dtype=float).reshape(-1)
-    return {
+        truth_elem = np.asarray(truth_elem_data).reshape(-1)
+    background_value = (
+        forward_model_config.background_conductivity
+        if background is None
+        else background
+    )
+    payload: dict[str, Any] = {
         "exchange_format": STANDARD_INTEROP_FORMAT,
+        "schema_version": 2,
+        "index_base": 1,
         "source_framework": source_framework,
+        "dimension": dimension,
+        "cell_type": "triangle" if dimension == 2 else "tetrahedron",
+        "boundary_entity_type": "edge" if dimension == 2 else "triangle",
         "nodes": nodes,
         "elems": elems,
         "boundary_edges": boundary_entities,
+        "boundary_facets": boundary_entities,
         "electrode_nodes": electrode_nodes,
         "electrode_node_counts": electrode_counts,
         "n_elec": int(
             forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
         ),
-        "background": float(background or forward_model_config.background_conductivity),
+        "background": background_value,
         "truth_elem_data": truth_elem,
         "contact_impedance": (
-            float(forward_model_config.contact_impedance)
-            if isinstance(forward_model_config.contact_impedance, (int, float))
-            else np.asarray(
-                forward_model_config.contact_impedance or [0.01], dtype=float
+            forward_model_config.contact_impedance
+            if isinstance(
+                forward_model_config.contact_impedance,
+                (int, float, complex),
             )
+            else np.asarray(forward_model_config.contact_impedance or [0.01])
         ),
         "mesh_name": mesh_name,
         "mesh_level": "bridge_export",
         "scenario_name": scenario_name,
     }
+    if (
+        forward_model_config.custom_stim_matrix is not None
+        and forward_model_config.custom_meas_matrices is not None
+    ):
+        stim_matrix = np.asarray(
+            forward_model_config.custom_stim_matrix,
+            dtype=float,
+        )
+        if stim_matrix.ndim == 1:
+            stim_matrix = stim_matrix.reshape(1, -1)
+        raw_measurements = forward_model_config.custom_meas_matrices
+        if isinstance(raw_measurements, (list, tuple)):
+            measurement_list = [
+                np.asarray(matrix, dtype=float) for matrix in raw_measurements
+            ]
+        else:
+            measurement_array = np.asarray(raw_measurements, dtype=float)
+            if measurement_array.ndim == 2:
+                measurement_list = [
+                    measurement_array.copy() for _ in range(stim_matrix.shape[0])
+                ]
+            elif measurement_array.ndim == 3:
+                measurement_list = [
+                    np.asarray(matrix, dtype=float) for matrix in measurement_array
+                ]
+            else:
+                raise ValueError(
+                    "Custom measurement matrices must be 2D, 3D, or a list"
+                )
+        if len(measurement_list) != stim_matrix.shape[0]:
+            raise ValueError(
+                "Custom stimulation and measurement matrix counts must match"
+            )
+        if any(
+            matrix.ndim != 2 or matrix.shape[1] != stim_matrix.shape[1]
+            for matrix in measurement_list
+        ):
+            raise ValueError(
+                "Each custom measurement matrix must have n_electrodes columns"
+            )
+        max_measurements = max(matrix.shape[0] for matrix in measurement_list)
+        padded = np.zeros(
+            (len(measurement_list), max_measurements, stim_matrix.shape[1]),
+            dtype=float,
+        )
+        counts = np.empty(len(measurement_list), dtype=np.int64)
+        for index, matrix in enumerate(measurement_list):
+            padded[index, : matrix.shape[0], :] = matrix
+            counts[index] = matrix.shape[0]
+        payload.update(
+            {
+                "stim_matrix": stim_matrix,
+                "meas_matrices": padded,
+                "measurement_counts": counts,
+            }
+        )
+    return payload
 
 
 class EidorsBridgeRunner:
@@ -404,9 +597,7 @@ class EidorsBridgeRunner:
                 geometry_payload = loadmat(
                     geometry_path, squeeze_me=True, struct_as_record=False
                 )
-        existing_cfg = loaded.forward_model_config or _config_from_loaded_package(
-            loaded
-        )
+        existing_cfg = _config_from_loaded_package(loaded)
         forward_cfg = existing_cfg.with_overrides(
             stim_pattern=hints.get("stim_pattern") or existing_cfg.stim_pattern,
             meas_pattern=hints.get("meas_pattern") or existing_cfg.meas_pattern,
@@ -645,10 +836,6 @@ class InteropSmokeValidator:
             "message": t("interop.svc.smoke.compat_ok", count=int(target.size)),
         }
 
-        if int(config.mesh_dimension) == 3:
-            result["message"] += t("interop.svc.smoke.compat_3d_suffix")
-            return result
-
         preset = (
             reconstruction_preset
             or loaded.reconstruction_preset
@@ -662,6 +849,10 @@ class InteropSmokeValidator:
             n_rings=config.n_rings,
             stim_pattern=config.stim_pattern,
             meas_pattern=config.meas_pattern,
+            electrode_layout=config.electrode_layout,
+            measurement_protocol=config.measurement_protocol,
+            custom_stim_matrix=config.custom_stim_matrix,
+            custom_meas_matrices=config.custom_meas_matrices,
             drive_mode=config.drive_mode,
             drive_value=config.drive_value,
             geometry_scale_to_m=config.geometry_scale_to_m,
@@ -674,25 +865,59 @@ class InteropSmokeValidator:
             stim_first_positive=config.stim_first_positive,
         )
         system = EITSystem(
-            n_elec=config.n_elec,
+            n_elec=config.total_electrodes(),
             pattern_config=pattern,
+            contact_impedance=config.contact_impedance,
+            base_conductivity=config.background_conductivity,
             regularization_alpha=float(preset.regularization_alpha),
             difference_mode=str(preset.difference_mode),
             difference_orientation=str(preset.difference_orientation),
             potential_order=config.potential_order,
         )
-        system.setup(
-            mesh_source="generated",
-            dimension=config.mesh_dimension,
-            mesh_size=config.mesh_refinement,
-            radius=config.radius,
-            height=config.height,
-            electrode_height_ratio=config.electrode_height_ratio,
-            electrode_level_fractions=config.electrode_level_fractions,
-            z_center=config.z_center,
-            mesh_family=config.mesh_family,
-            geometry_version=config.geometry_version,
-        )
+        if config.mesh_source == "interop":
+            from pyeidors.interop import build_mesh_from_exchange_mat
+
+            mesh_path = Path(config.mesh_path)
+            if not mesh_path.is_file():
+                raise FileNotFoundError(
+                    "Imported EIDORS geometry file was not found: "
+                    f"{mesh_path or '<empty>'}. Reload the Bridge Package."
+                )
+            imported_mesh, geometry_payload = build_mesh_from_exchange_mat(mesh_path)
+            system.setup(
+                mesh=imported_mesh,
+                initialize_inverse=int(config.mesh_dimension) != 3,
+            )
+            result.update(
+                {
+                    "mesh_source": "interop",
+                    "geometry_format": str(
+                        np.asarray(geometry_payload["exchange_format"]).reshape(-1)[0]
+                    ),
+                    "n_nodes": imported_mesh.num_vertices(),
+                    "n_elements": imported_mesh.num_cells(),
+                    "n_electrodes": int(imported_mesh.n_electrodes),
+                }
+            )
+        else:
+            system.setup(
+                mesh_source="generated",
+                dimension=config.mesh_dimension,
+                mesh_size=config.mesh_refinement,
+                radius=config.radius,
+                height=config.height,
+                electrode_height_ratio=config.electrode_height_ratio,
+                electrode_level_fractions=config.electrode_level_fractions,
+                z_center=config.z_center,
+                mesh_family=config.mesh_family,
+                geometry_version=config.geometry_version,
+                initialize_inverse=int(config.mesh_dimension) != 3,
+            )
+
+        if int(config.mesh_dimension) == 3:
+            result["status"] = "mesh_loaded"
+            result["message"] += t("interop.svc.smoke.compat_3d_suffix")
+            return result
 
         ref_data = MeasurementDataset.from_metadata(
             homogeneous.reshape(1, -1), metadata, data_type="real"
@@ -710,7 +935,7 @@ class InteropSmokeValidator:
             )
 
         conductivity = np.asarray(
-            getattr(recon, "conductivity", np.asarray([])), dtype=float
+            getattr(recon, "conductivity", np.asarray([]))
         ).reshape(-1)
         result.update(
             {

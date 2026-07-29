@@ -11,7 +11,12 @@ from scipy.io import loadmat, savemat
 
 from pyeidors.femx import build_eit_mesh
 
-STANDARD_INTEROP_FORMAT = "eidors_pyeidors_bridge_v1"
+LEGACY_INTEROP_FORMAT = "eidors_pyeidors_bridge_v1"
+STANDARD_INTEROP_FORMAT_V2 = "eidors_pyeidors_geometry_v2"
+STANDARD_INTEROP_FORMAT = STANDARD_INTEROP_FORMAT_V2
+SUPPORTED_INTEROP_FORMATS = frozenset(
+    {LEGACY_INTEROP_FORMAT, STANDARD_INTEROP_FORMAT_V2}
+)
 
 REQUIRED_EXCHANGE_FIELDS = {
     "exchange_format",
@@ -28,6 +33,15 @@ REQUIRED_EXCHANGE_FIELDS = {
     "mesh_name",
     "mesh_level",
     "scenario_name",
+}
+
+REQUIRED_V2_EXCHANGE_FIELDS = {
+    "schema_version",
+    "index_base",
+    "dimension",
+    "cell_type",
+    "boundary_entity_type",
+    "boundary_facets",
 }
 
 
@@ -134,8 +148,8 @@ def build_electrode_arrays(mesh) -> tuple[np.ndarray, np.ndarray]:
     return electrode_nodes, electrode_counts
 
 
-def build_boundary_edges(mesh) -> np.ndarray:
-    """Collect one-based boundary edges from a marked DOLFINx PyEIDORS mesh."""
+def build_boundary_facets(mesh) -> np.ndarray:
+    """Collect one-based boundary facets from a marked DOLFINx PyEIDORS mesh."""
     boundary_markers = getattr(mesh, "facet_tags", None)
     if boundary_markers is None:
         raise ValueError("Mesh is missing facet tags")
@@ -150,27 +164,107 @@ def build_boundary_edges(mesh) -> np.ndarray:
     if facet_to_vertex is None:
         raise ValueError("Mesh is missing facet-to-vertex connectivity")
 
-    edges: list[np.ndarray] = []
+    facet_width = max(int(mesh_obj.topology.dim), 1)
+    facets: list[np.ndarray] = []
     for facet_idx, marker in zip(
         boundary_markers.indices, boundary_markers.values, strict=True
     ):
         if int(marker) == 0:
             continue
-        edge = (
+        facet = (
             np.asarray(facet_to_vertex.links(int(facet_idx)), dtype=np.int64).reshape(
                 -1
             )
             + 1
         )
-        if len(edge) != 2:
-            continue
-        edges.append(edge)
-    if not edges:
-        raise ValueError("No boundary edges found")
-    out = np.empty((len(edges), 2), dtype=np.int64)
-    for edge_idx, edge in enumerate(edges):
-        out[edge_idx, :] = edge
+        if len(facet) != facet_width:
+            raise ValueError(
+                "Boundary facet width does not match the mesh topological dimension"
+            )
+        facets.append(facet)
+    if not facets:
+        raise ValueError("No boundary facets found")
+    out = np.empty((len(facets), facet_width), dtype=np.int64)
+    for facet_idx, facet in enumerate(facets):
+        out[facet_idx, :] = facet
     return out
+
+
+def build_boundary_edges(mesh) -> np.ndarray:
+    """Collect one-based 2D boundary edges (legacy compatibility API)."""
+    facets = build_boundary_facets(mesh)
+    if facets.shape[1] != 2:
+        raise ValueError(
+            "build_boundary_edges only supports 2D meshes; "
+            "use build_boundary_facets for 3D meshes"
+        )
+    return facets
+
+
+def _scalar_text(value: Any) -> str:
+    return str(np.asarray(value).reshape(-1)[0])
+
+
+def _scalar_int(value: Any, field: str) -> int:
+    try:
+        return int(np.asarray(value).reshape(-1)[0])
+    except (TypeError, ValueError, IndexError) as exc:
+        raise ValueError(f"'{field}' must be an integer scalar") from exc
+
+
+def _connectivity_array(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    width: int,
+    n_nodes: int,
+) -> np.ndarray:
+    data = np.asarray(payload[field], dtype=np.int64)
+    if data.ndim == 1:
+        if data.size % width != 0:
+            raise ValueError(
+                f"'{field}' cannot be reshaped into width-{width} connectivity"
+            )
+        data = data.reshape(-1, width)
+    if data.ndim != 2 or data.shape[1] != width:
+        raise ValueError(
+            f"'{field}' must be a two-dimensional array with width {width}"
+        )
+    lower = int(np.min(data, initial=1))
+    upper = int(np.max(data, initial=0))
+    if lower < 1:
+        raise ValueError(f"'{field}' must use one-based node ids")
+    if upper > n_nodes:
+        raise ValueError(
+            f"'{field}' contains node id {upper}, but nodes has only {n_nodes} rows"
+        )
+    return data
+
+
+def _electrode_node_matrix(
+    payload: dict[str, Any],
+    counts: np.ndarray,
+) -> np.ndarray:
+    n_elec = _scalar_int(payload["n_elec"], "n_elec")
+    raw = np.asarray(payload["electrode_nodes"], dtype=np.int64)
+    if raw.ndim == 0:
+        raw = raw.reshape(1, 1)
+    elif raw.ndim == 1:
+        if raw.size % n_elec != 0:
+            raise ValueError(
+                "Flattened 'electrode_nodes' cannot be reshaped to n_elec rows"
+            )
+        raw = raw.reshape(n_elec, raw.size // n_elec)
+    elif raw.ndim != 2:
+        raise ValueError("'electrode_nodes' must be scalar, 1D, or 2D")
+    if raw.shape[0] != n_elec and raw.shape[1] == n_elec:
+        raw = raw.T
+    if raw.shape[0] != n_elec or counts.size != n_elec:
+        raise ValueError(
+            "'electrode_nodes' rows and 'electrode_node_counts' length must "
+            "equal n_elec"
+        )
+    return np.ascontiguousarray(raw, dtype=np.int64)
 
 
 def validate_exchange_payload(payload: dict[str, Any]) -> None:
@@ -181,10 +275,120 @@ def validate_exchange_payload(payload: dict[str, Any]) -> None:
             f"Exchange payload is missing required fields: {', '.join(missing)}"
         )
 
-    exchange_format = str(np.asarray(payload["exchange_format"]).reshape(-1)[0])
-    if exchange_format != STANDARD_INTEROP_FORMAT:
+    exchange_format = _scalar_text(payload["exchange_format"])
+    if exchange_format not in SUPPORTED_INTEROP_FORMATS:
         raise ValueError(
-            f"Unsupported exchange format {exchange_format!r}; expected {STANDARD_INTEROP_FORMAT!r}"
+            f"Unsupported exchange format {exchange_format!r}; expected one of "
+            f"{sorted(SUPPORTED_INTEROP_FORMATS)!r}"
+        )
+    if exchange_format == STANDARD_INTEROP_FORMAT_V2:
+        missing_v2 = sorted(REQUIRED_V2_EXCHANGE_FIELDS.difference(payload))
+        if missing_v2:
+            raise ValueError(
+                "Geometry v2 payload is missing required fields: "
+                + ", ".join(missing_v2)
+            )
+        if _scalar_int(payload["schema_version"], "schema_version") != 2:
+            raise ValueError("'schema_version' must be 2 for Geometry v2")
+        if _scalar_int(payload["index_base"], "index_base") != 1:
+            raise ValueError("'index_base' must be 1 for Geometry v2")
+
+    nodes = np.asarray(payload["nodes"])
+    if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] not in {2, 3}:
+        raise ValueError("'nodes' must have shape (n_nodes, 2) or (n_nodes, 3)")
+    inferred_dimension = 3 if nodes.shape[1] == 3 else 2
+    dimension = (
+        _scalar_int(payload["dimension"], "dimension")
+        if "dimension" in payload
+        else inferred_dimension
+    )
+    if dimension not in {2, 3}:
+        raise ValueError("'dimension' must be 2 or 3")
+    if nodes.shape[1] != dimension:
+        raise ValueError(
+            f"'nodes' has {nodes.shape[1]} columns, inconsistent with dimension={dimension}"
+        )
+
+    expected_cell_type = "triangle" if dimension == 2 else "tetrahedron"
+    expected_elem_width = dimension + 1
+    cell_type = (
+        _scalar_text(payload["cell_type"]).strip().lower()
+        if "cell_type" in payload
+        else expected_cell_type
+    )
+    if cell_type != expected_cell_type:
+        raise ValueError(
+            f"dimension={dimension} requires cell_type={expected_cell_type!r}"
+        )
+    elems = _connectivity_array(
+        payload,
+        "elems",
+        width=expected_elem_width,
+        n_nodes=nodes.shape[0],
+    )
+
+    boundary_field = (
+        "boundary_facets" if "boundary_facets" in payload else "boundary_edges"
+    )
+    boundary = _connectivity_array(
+        payload,
+        boundary_field,
+        width=dimension,
+        n_nodes=nodes.shape[0],
+    )
+    if "boundary_facets" in payload and "boundary_edges" in payload:
+        legacy_boundary = _connectivity_array(
+            payload,
+            "boundary_edges",
+            width=dimension,
+            n_nodes=nodes.shape[0],
+        )
+        canonical = np.sort(boundary, axis=1)
+        legacy_canonical = np.sort(legacy_boundary, axis=1)
+        canonical = canonical[np.lexsort(canonical.T[::-1])]
+        legacy_canonical = legacy_canonical[np.lexsort(legacy_canonical.T[::-1])]
+        if not np.array_equal(canonical, legacy_canonical):
+            raise ValueError(
+                "'boundary_facets' and legacy 'boundary_edges' must describe "
+                "the same boundary entities when both are present"
+            )
+    if "boundary_entity_type" in payload:
+        expected_boundary_type = "edge" if dimension == 2 else "triangle"
+        boundary_type = _scalar_text(payload["boundary_entity_type"]).strip().lower()
+        if boundary_type != expected_boundary_type:
+            raise ValueError(
+                f"dimension={dimension} requires "
+                f"boundary_entity_type={expected_boundary_type!r}"
+            )
+
+    n_elec = _scalar_int(payload["n_elec"], "n_elec")
+    if n_elec <= 0:
+        raise ValueError("'n_elec' must be positive")
+    counts = np.asarray(payload["electrode_node_counts"], dtype=np.int64).reshape(-1)
+    electrode_nodes = _electrode_node_matrix(payload, counts)
+    for row, count in zip(electrode_nodes, counts, strict=True):
+        count_value = int(count)
+        if count_value <= 0 or count_value > row.size:
+            raise ValueError(
+                "Each electrode node count must be positive and fit its padded row"
+            )
+        active = np.asarray(row[:count_value], dtype=np.int64)
+        lower = int(np.min(active, initial=1))
+        upper = int(np.max(active, initial=0))
+        if lower < 1 or upper > nodes.shape[0]:
+            raise ValueError(
+                "Active electrode node ids must be one-based and within nodes"
+            )
+
+    truth = np.asarray(payload["truth_elem_data"]).reshape(-1)
+    if truth.size not in {1, elems.shape[0]}:
+        raise ValueError(
+            "'truth_elem_data' must be scalar or have one value per element"
+        )
+    impedance = np.asarray(payload["contact_impedance"]).reshape(-1)
+    if impedance.size not in {1, n_elec}:
+        raise ValueError(
+            "'contact_impedance' must be scalar or have one value per electrode"
         )
 
 
@@ -200,10 +404,8 @@ def _load_standard_electrode_node_lists(
 ) -> list[np.ndarray] | None:
     if "electrode_nodes" not in payload:
         return None
-    electrode_nodes = np.atleast_2d(
-        np.asarray(payload["electrode_nodes"], dtype=np.int64)
-    )
     counts = np.asarray(payload["electrode_node_counts"], dtype=np.int64).reshape(-1)
+    electrode_nodes = _electrode_node_matrix(payload, counts)
     node_lists = []
     for row, count in zip(electrode_nodes, counts, strict=True):
         active_nodes = np.asarray(row[: int(count)], dtype=np.int64).reshape(-1)
@@ -213,13 +415,14 @@ def _load_standard_electrode_node_lists(
     return node_lists
 
 
-def _load_nodes(payload: dict[str, Any]) -> np.ndarray:
-    nodes = np.asarray(payload["nodes"], dtype=np.float64)
-    if nodes.ndim != 2 or nodes.shape[1] < 2:
-        raise ValueError(
-            "'nodes' must be a two-dimensional array with at least x/y columns"
-        )
-    return np.ascontiguousarray(nodes[:, :2], dtype=np.float64)
+def _load_nodes(payload: dict[str, Any], *, dimension: int) -> np.ndarray:
+    import dolfinx
+
+    geometry_dtype = np.dtype(getattr(dolfinx, "default_real_type", np.float64))
+    nodes = np.asarray(payload["nodes"], dtype=geometry_dtype)
+    if nodes.ndim != 2 or nodes.shape[1] != dimension:
+        raise ValueError(f"'nodes' must have shape (n_nodes, {dimension})")
+    return np.ascontiguousarray(nodes, dtype=geometry_dtype)
 
 
 def _load_one_based_connectivity(
@@ -241,20 +444,31 @@ def _load_one_based_connectivity(
     return np.ascontiguousarray(data - 1, dtype=np.int64)
 
 
-def _create_dolfinx_triangle_mesh(nodes: np.ndarray, elems: np.ndarray):
+def _create_dolfinx_simplex_mesh(
+    nodes: np.ndarray,
+    elems: np.ndarray,
+    *,
+    cell_type: str,
+):
     from dolfinx import mesh as dmesh
     from mpi4py import MPI
     import basix.ufl
     import ufl
 
-    coordinate_element = basix.ufl.element("Lagrange", "triangle", 1, shape=(2,))
+    coordinate_element = basix.ufl.element(
+        "Lagrange",
+        cell_type,
+        1,
+        shape=(nodes.shape[1],),
+        dtype=nodes.dtype,
+    )
     domain = ufl.Mesh(coordinate_element)
     return dmesh.create_mesh(MPI.COMM_WORLD, elems, domain, nodes)
 
 
 def _standard_facet_tags(
     mesh,
-    boundary_edges: np.ndarray,
+    boundary_facets: np.ndarray,
     electrode_node_lists: list[np.ndarray],
 ):
     from dolfinx import mesh as dmesh
@@ -270,11 +484,13 @@ def _standard_facet_tags(
     gap_tag = len(electrode_sets) + 2
     association_table["gaps"] = gap_tag
 
-    boundary_pairs = {
+    boundary_entities = {
         tuple(
-            sorted(int(value) for value in np.asarray(edge, dtype=np.int64).reshape(-1))
+            sorted(
+                int(value) for value in np.asarray(facet, dtype=np.int64).reshape(-1)
+            )
         )
-        for edge in boundary_edges
+        for facet in boundary_facets
     }
 
     vertex_map = mesh.topology.index_map(0)
@@ -299,8 +515,7 @@ def _standard_facet_tags(
     if facet_to_vertex is None or facet_map is None:
         raise ValueError("Unable to build DOLFINx facet connectivity for exchange mesh")
 
-    indices: list[int] = []
-    values: list[int] = []
+    boundary_records: list[tuple[int, tuple[int, ...]]] = []
     for facet_idx in range(int(facet_map.size_local)):
         local_vertices = np.asarray(
             facet_to_vertex.links(facet_idx),
@@ -309,28 +524,85 @@ def _standard_facet_tags(
         source_vertices = tuple(
             sorted(int(value) for value in local_to_source[local_vertices])
         )
-        if source_vertices not in boundary_pairs:
+        if source_vertices not in boundary_entities:
             continue
-        marker = gap_tag
-        vertex_set = set(source_vertices)
-        for elec_idx, node_set in enumerate(electrode_sets, start=1):
-            if vertex_set.issubset(node_set):
-                marker = elec_idx + 1
-                break
-        indices.append(facet_idx)
-        values.append(marker)
+        boundary_records.append((facet_idx, source_vertices))
 
-    if len(indices) != len(boundary_pairs):
+    if len(boundary_records) != len(boundary_entities):
         raise ValueError(
-            "Exchange payload boundary edges do not match the generated DOLFINx mesh facets"
+            "Exchange payload boundary facets do not match the generated DOLFINx mesh facets"
         )
 
+    point_electrodes = {
+        index
+        for index, node_set in enumerate(electrode_sets)
+        if len(node_set) < int(mesh.topology.dim)
+    }
+    markers: dict[int, int] = {}
+    marker_counts = np.zeros(len(electrode_sets), dtype=np.int64)
+    for facet_idx, source_vertices in boundary_records:
+        vertex_set = set(source_vertices)
+        for elec_idx, node_set in enumerate(electrode_sets, start=1):
+            if elec_idx - 1 not in point_electrodes and vertex_set.issubset(node_set):
+                markers[facet_idx] = elec_idx + 1
+                marker_counts[elec_idx - 1] += 1
+                break
+
+    for point_index in sorted(point_electrodes):
+        node_set = electrode_sets[point_index]
+        candidates = [
+            facet_idx
+            for facet_idx, source_vertices in boundary_records
+            if node_set.intersection(source_vertices)
+        ]
+        if not candidates:
+            raise ValueError(
+                f"Point electrode {point_index + 1} is not on a boundary facet"
+            )
+        selected = next(
+            (facet_idx for facet_idx in candidates if facet_idx not in markers),
+            None,
+        )
+        if selected is None:
+            raise ValueError(
+                "Unable to assign a unique incident boundary facet to point "
+                f"electrode {point_index + 1}"
+            )
+        markers[selected] = point_index + 2
+        marker_counts[point_index] += 1
+
+    for facet_idx, source_vertices in boundary_records:
+        if facet_idx in markers:
+            continue
+        point_candidates = [
+            point_index
+            for point_index in sorted(point_electrodes)
+            if electrode_sets[point_index].intersection(source_vertices)
+        ]
+        if point_candidates:
+            selected = min(point_candidates, key=lambda item: marker_counts[item])
+            markers[facet_idx] = selected + 2
+            marker_counts[selected] += 1
+        else:
+            markers[facet_idx] = gap_tag
+
+    missing_electrodes = [
+        str(index + 1) for index, count in enumerate(marker_counts) if int(count) <= 0
+    ]
+    if missing_electrodes:
+        raise ValueError(
+            "Imported electrode definitions have no positive boundary facets: "
+            + ", ".join(missing_electrodes)
+        )
+
+    indices = np.asarray(sorted(markers), dtype=np.int32)
+    values = np.asarray([markers[int(index)] for index in indices], dtype=np.int32)
     order = np.argsort(np.asarray(indices, dtype=np.int64))
     facet_tags = dmesh.meshtags(
         mesh,
         fdim,
-        np.asarray(indices, dtype=np.int32)[order],
-        np.asarray(values, dtype=np.int32)[order],
+        indices[order],
+        values[order],
     )
 
     tdim = int(mesh.topology.dim)
@@ -342,7 +614,10 @@ def _standard_facet_tags(
         np.arange(n_cells, dtype=np.int32),
         np.ones(n_cells, dtype=np.int32),
     )
-    return facet_tags, cell_tags, association_table
+    projection = (
+        "incident_boundary_facets" if point_electrodes else "exact_surface_nodes"
+    )
+    return facet_tags, cell_tags, association_table, projection
 
 
 def build_mesh_from_exchange_mat(path: Path):
@@ -350,9 +625,23 @@ def build_mesh_from_exchange_mat(path: Path):
     payload = loadmat(path, squeeze_me=True, struct_as_record=False)
     validate_exchange_payload(payload)
 
-    nodes = _load_nodes(payload)
-    elems = _load_one_based_connectivity(payload, "elems", 3)
-    boundary_edges = _load_one_based_connectivity(payload, "boundary_edges", 2)
+    node_columns = int(np.asarray(payload["nodes"]).shape[1])
+    dimension = (
+        _scalar_int(payload["dimension"], "dimension")
+        if "dimension" in payload
+        else node_columns
+    )
+    cell_type = "triangle" if dimension == 2 else "tetrahedron"
+    nodes = _load_nodes(payload, dimension=dimension)
+    elems = _load_one_based_connectivity(payload, "elems", dimension + 1)
+    boundary_field = (
+        "boundary_facets" if "boundary_facets" in payload else "boundary_edges"
+    )
+    boundary_facets = _load_one_based_connectivity(
+        payload,
+        boundary_field,
+        dimension,
+    )
     standard_electrodes = _load_standard_electrode_node_lists(payload)
     if standard_electrodes is None:
         raise ValueError(
@@ -365,30 +654,42 @@ def build_mesh_from_exchange_mat(path: Path):
             f"but contains {len(standard_electrodes)} electrode node lists"
         )
 
-    dolfinx_mesh = _create_dolfinx_triangle_mesh(nodes, elems)
-    facet_tags, cell_tags, association_table = _standard_facet_tags(
-        dolfinx_mesh,
-        boundary_edges,
-        standard_electrodes,
+    dolfinx_mesh = _create_dolfinx_simplex_mesh(
+        nodes,
+        elems,
+        cell_type=cell_type,
     )
+    facet_tags, cell_tags, association_table, electrode_projection = (
+        _standard_facet_tags(
+            dolfinx_mesh,
+            boundary_facets,
+            standard_electrodes,
+        )
+    )
+    center = np.mean(nodes, axis=0)
     mesh = build_eit_mesh(
         dolfinx_mesh,
         facet_tags=facet_tags,
         cell_tags=cell_tags,
         association_table=association_table,
-        radius=float(np.max(np.linalg.norm(nodes, axis=1))),
+        radius=float(np.max(np.linalg.norm(nodes - center, axis=1))),
         mesh_file=str(path),
         electrode_vertices=[
             nodes[np.asarray(ids, dtype=np.int64)] for ids in standard_electrodes
         ],
-        mesh_family="triangle",
-        geometry_version="interop-v1",
-        generator_revision="interop-v1",
+        mesh_family=cell_type,
+        geometry_version=(
+            "interop-v2"
+            if _scalar_text(payload["exchange_format"]) == STANDARD_INTEROP_FORMAT_V2
+            else "interop-v1"
+        ),
+        generator_revision="interop-v2",
     )
     if "mesh_name" in payload:
         mesh.mesh_name = str(np.asarray(payload["mesh_name"]).reshape(-1)[0])
     else:
         mesh.mesh_name = path.stem
-    mesh.exchange_format = STANDARD_INTEROP_FORMAT
+    mesh.exchange_format = _scalar_text(payload["exchange_format"])
     mesh.n_electrodes = n_elec
+    mesh.electrode_projection = electrode_projection
     return mesh, payload

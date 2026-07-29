@@ -308,6 +308,9 @@ class ForwardSolverResult:
     n_elements: int
     n_measurements: int
     homogeneous_voltages: np.ndarray | None = None
+    boundary_facets: np.ndarray | None = None
+    electrode_nodes: np.ndarray | None = None
+    electrode_node_counts: np.ndarray | None = None
     forward_model_config: dict[str, Any] = field(default_factory=dict)
     error_msg: str | None = None
 
@@ -896,6 +899,34 @@ def _setup_generated_forward_system(
     forward_cfg: ForwardModelConfig,
     runtime: dict[str, Any],
 ) -> None:
+    if forward_cfg.mesh_source == "interop":
+        mesh_path = Path(forward_cfg.mesh_path)
+        if not mesh_path.is_file():
+            raise FileNotFoundError(
+                "Imported EIDORS geometry file was not found: "
+                f"{mesh_path or '<empty>'}. Reload the Bridge Package."
+            )
+        from pyeidors.interop import build_mesh_from_exchange_mat
+
+        imported_mesh, _payload = build_mesh_from_exchange_mat(mesh_path)
+        imported_dimension = int(imported_mesh.topology.dim)
+        if imported_dimension != int(forward_cfg.mesh_dimension):
+            raise ValueError(
+                "Imported geometry dimension does not match ForwardModelConfig: "
+                f"{imported_dimension} != {forward_cfg.mesh_dimension}"
+            )
+        imported_electrodes = int(
+            getattr(imported_mesh, "n_electrodes", forward_cfg.total_electrodes())
+        )
+        if imported_electrodes != forward_cfg.total_electrodes():
+            raise ValueError(
+                "Imported geometry electrode count does not match "
+                "ForwardModelConfig: "
+                f"{imported_electrodes} != {forward_cfg.total_electrodes()}"
+            )
+        system.setup(mesh=imported_mesh, initialize_inverse=False)
+        return
+
     system.setup(
         mesh_source="generated",
         dimension=forward_cfg.mesh_dimension,
@@ -1288,6 +1319,16 @@ def _execute_forward_request_unlocked(
         homog_voltages,
         real_dtype=out_dtype,
     )
+    boundary_facets_out: np.ndarray | None = None
+    electrode_nodes_out: np.ndarray | None = None
+    electrode_counts_out: np.ndarray | None = None
+    try:
+        from pyeidors.interop import build_boundary_facets, build_electrode_arrays
+
+        boundary_facets_out = build_boundary_facets(system.mesh)
+        electrode_nodes_out, electrode_counts_out = build_electrode_arrays(system.mesh)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        log.warning("Forward result could not preserve exact electrode facets: %s", exc)
     runtime_diagnostics = _forward_runtime_diagnostics(system)
     forward_model_config = {
         **forward_cfg.to_mapping(),
@@ -1321,6 +1362,9 @@ def _execute_forward_request_unlocked(
         n_elements=n_cells,
         n_measurements=len(voltages),
         homogeneous_voltages=homogeneous_voltages_out,
+        boundary_facets=boundary_facets_out,
+        electrode_nodes=electrode_nodes_out,
+        electrode_node_counts=electrode_counts_out,
         forward_model_config=forward_model_config,
     )
     emit("Forward solve complete.")

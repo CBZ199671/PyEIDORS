@@ -4105,6 +4105,9 @@ class EITWorkstation(QMainWindow):
                     background=simulation_cfg.background_conductivity,
                     mesh_name="simulation_export",
                     scenario_name="simulation_forward_result",
+                    boundary_facets=self._last_fwd_result.boundary_facets,
+                    electrode_nodes=self._last_fwd_result.electrode_nodes,
+                    electrode_node_counts=(self._last_fwd_result.electrode_node_counts),
                 )
             except Exception as exc:
                 simulation_notes.append(

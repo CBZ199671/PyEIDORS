@@ -174,6 +174,13 @@ def _guess_host_os_from_path(path: str | Path) -> str:
         return ""
     if _is_windows_style_path(raw):
         return "windows"
+    normalized = raw.replace("\\", "/")
+    if normalized.startswith("/mnt/") and Path(normalized).suffix.lower() in {
+        ".exe",
+        ".bat",
+        ".cmd",
+    }:
+        return "windows"
     return "linux"
 
 

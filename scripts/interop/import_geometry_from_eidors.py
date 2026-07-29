@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import sys
 from pathlib import Path
@@ -13,12 +14,14 @@ from scipy.io import savemat
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
-BENCHMARK_SCRIPT_DIR = REPO_ROOT / "scripts" / "benchmarks"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
-if str(BENCHMARK_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(BENCHMARK_SCRIPT_DIR))
 
+from _bridge_case_contract import (
+    conductivity_metrics,
+    real_vector,
+    voltage_metrics,
+)
 from pyeidors import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.interop import (
@@ -26,12 +29,6 @@ from pyeidors.interop import (
     build_mesh_from_exchange_mat,
     load_forward_csv,
 )
-
-from benchmark_difference_runtime import (
-    build_single_step_namespace,
-    run_single_step_benchmark,
-)
-from benchmark_reviewer_case import conductivity_metrics, voltage_metrics
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,7 +66,11 @@ def main() -> None:
 
     background = float(np.asarray(payload["background"]).reshape(-1)[0])
     contact_impedance = float(np.asarray(payload["contact_impedance"]).reshape(-1)[0])
-    truth_elem_data = np.asarray(payload["truth_elem_data"], dtype=float).reshape(-1)
+    truth_elem_data = real_vector(
+        payload["truth_elem_data"],
+        name="truth conductivity",
+    )
+    target_diff = real_vector(target_diff, name="target voltage difference")
 
     system = EITSystem(
         n_elec=args.n_elec,
@@ -78,27 +79,43 @@ def main() -> None:
         base_conductivity=background,
         regularization_type="noser",
         regularization_alpha=1.0,
+        hyperparameter=0.01,
         noser_exponent=0.5,
+        difference_step_size_mode="optimize",
+        difference_step_size_bounds=(1e-5, 10.0),
+        difference_step_size_fmin_options={"maxiter": 50},
     )
     system.setup(mesh=imported_mesh)
 
     baseline_image = system.create_homogeneous_image(conductivity=background)
-
-    single_step_args = build_single_step_namespace(
-        system,
-        jacobian_backend="eidors_adjoint",
-        meas_weight_strategy="none",
-        single_step_space="parameter",
-        eidors_compatible_step_search=True,
+    template_data = system.forward_solve(baseline_image)
+    reference_data = replace(
+        template_data,
+        meas=np.asarray(baseline).reshape(-1),
     )
-    recon_image, predicted_diff, step_size = run_single_step_benchmark(
-        system,
-        baseline_image,
-        baseline,
-        phantom,
-        single_step_args,
-        target_diff=target_diff,
+    target_data = replace(
+        template_data,
+        meas=np.asarray(phantom).reshape(-1),
     )
+    reconstruction = system.difference_reconstruct(
+        measurement_data=target_data,
+        reference_data=reference_data,
+        initial_image=baseline_image,
+    )
+    recon_image = reconstruction.conductivity_image
+    predicted_diff = real_vector(
+        reconstruction.simulated,
+        name="predicted voltage difference",
+    )
+    recon_elem_data = real_vector(
+        recon_image.elem_data,
+        name="reconstructed conductivity",
+    )
+    step_info = reconstruction.metadata.get("solver_diagnostics", {}).get(
+        "difference_step_size",
+        {},
+    )
+    step_size = float(step_info.get("value", 1.0))
 
     result = {
         "study": "same_geometry_cross_generation",
@@ -109,7 +126,7 @@ def main() -> None:
         ),
         "mesh_name": imported_mesh.mesh_name,
         "n_nodes": int(imported_mesh.num_vertices()),
-        "n_elements": int(len(system.fwd_model.V_sigma.dofmap().dofs())),
+        "n_elements": int(imported_mesh.num_cells()),
         "electrode_coverage": None,
         "jacobian_backend": "eidors_adjoint",
         "meas_weight_strategy": "none",
@@ -119,7 +136,7 @@ def main() -> None:
         "imported_same_geometry": True,
     }
     result.update(voltage_metrics(target_diff, predicted_diff))
-    result.update(conductivity_metrics(truth_elem_data, recon_image.elem_data))
+    result.update(conductivity_metrics(truth_elem_data, recon_elem_data))
 
     args.output_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
     if args.details_mat is not None:
@@ -133,12 +150,10 @@ def main() -> None:
                 "source_framework": source_framework,
                 "framework": "pyeidors",
                 "mesh_name": imported_mesh.mesh_name,
-                "truth_elem_data": np.asarray(truth_elem_data, dtype=float).reshape(-1),
-                "recon_elem_data": np.asarray(
-                    recon_image.elem_data, dtype=float
-                ).reshape(-1),
-                "target_diff": np.asarray(target_diff, dtype=float).reshape(-1),
-                "predicted_diff": np.asarray(predicted_diff, dtype=float).reshape(-1),
+                "truth_elem_data": truth_elem_data,
+                "recon_elem_data": recon_elem_data,
+                "target_diff": target_diff,
+                "predicted_diff": predicted_diff,
                 "voltage_rmse": float(result["voltage_rmse"]),
                 "conductivity_rmse": float(result["conductivity_rmse"]),
             },

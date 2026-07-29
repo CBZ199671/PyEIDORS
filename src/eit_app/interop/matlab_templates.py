@@ -52,17 +52,32 @@ if exist(out_dir, 'dir') ~= 7
     mkdir(out_dir);
 end
 
-exchange_format = 'eidors_pyeidors_bridge_v1';
+exchange_format = 'eidors_pyeidors_geometry_v2';
+schema_version = 2;
+index_base = 1;
 source_framework = 'eidors';
 nodes = double(fmdl.nodes);
 elems = double(fmdl.elems);
-if isfield(fmdl, 'boundary')
-    boundary_edges = double(fmdl.boundary);
+dimension = double(size(nodes, 2));
+if dimension == 2
+    cell_type = 'triangle';
+    boundary_entity_type = 'edge';
+elseif dimension == 3
+    cell_type = 'tetrahedron';
+    boundary_entity_type = 'triangle';
 else
-    boundary_edges = double(find_boundary(fmdl.elems));
+    error('Only 2D triangle and 3D tetrahedron EIDORS models are supported.');
 end
+if isfield(fmdl, 'boundary')
+    boundary_facets = double(fmdl.boundary);
+else
+    boundary_facets = double(find_boundary(fmdl.elems));
+end
+boundary_edges = boundary_facets; % v1/MATLAB compatibility alias
 [electrode_nodes, electrode_node_counts, contact_impedance] = local_build_electrode_node_arrays(fmdl);
+[stim_matrix, meas_matrices, measurement_counts] = local_build_pattern_arrays(fmdl);
 n_elec = double(numel(fmdl.electrode));
+normalize_measurements = double(local_normalize_measurements(fmdl));
 background = local_background_value(img);
 truth_elem_data = local_truth_elem_data(img, background, size(elems, 1));
 mesh_name = local_mesh_name(fmdl, target_script);
@@ -71,13 +86,23 @@ scenario_name = local_script_kind(cfg);
 
 save(fullfile(out_dir, 'geometry.mat'), ...
     'exchange_format', ...
+    'schema_version', ...
+    'index_base', ...
     'source_framework', ...
+    'dimension', ...
+    'cell_type', ...
+    'boundary_entity_type', ...
     'nodes', ...
     'elems', ...
     'boundary_edges', ...
+    'boundary_facets', ...
     'electrode_nodes', ...
     'electrode_node_counts', ...
+    'stim_matrix', ...
+    'meas_matrices', ...
+    'measurement_counts', ...
     'n_elec', ...
+    'normalize_measurements', ...
     'background', ...
     'truth_elem_data', ...
     'contact_impedance', ...
@@ -189,6 +214,39 @@ if numel(unique(contact_impedance)) == 1
 end
 end
 
+function [stim_matrix, meas_matrices, measurement_counts] = local_build_pattern_arrays(fmdl)
+n_elec = numel(fmdl.electrode);
+if ~isfield(fmdl, 'stimulation') || isempty(fmdl.stimulation)
+    stim_matrix = zeros(0, n_elec);
+    meas_matrices = zeros(0, 0, n_elec);
+    measurement_counts = zeros(0, 1);
+    return;
+end
+n_stim = numel(fmdl.stimulation);
+measurement_counts = zeros(n_stim, 1);
+max_measurements = 0;
+stim_matrix = zeros(n_stim, n_elec);
+for i = 1:n_stim
+    stim_matrix(i, :) = full(double(fmdl.stimulation(i).stim_pattern(:)'));
+    measurement_counts(i) = size(fmdl.stimulation(i).meas_pattern, 1);
+    max_measurements = max(max_measurements, measurement_counts(i));
+end
+meas_matrices = zeros(n_stim, max_measurements, n_elec);
+for i = 1:n_stim
+    count = measurement_counts(i);
+    one_meas = full(double(fmdl.stimulation(i).meas_pattern));
+    meas_matrices(i, 1:count, :) = reshape(one_meas, 1, count, n_elec);
+end
+end
+
+function value = local_normalize_measurements(fmdl)
+if isfield(fmdl, 'normalize_measurements')
+    value = fmdl.normalize_measurements;
+else
+    value = 0;
+end
+end
+
 function value = local_background_value(img)
 if isempty(img) || ~isfield(img, 'elem_data') || isempty(img.elem_data)
     value = 1.0;
@@ -273,6 +331,9 @@ fmdl.solve = @fwd_solve_1st_order;
 fmdl.system_mat = @system_mat_1st_order;
 fmdl.jacobian = @jacobian_adjoint;
 fmdl.normalize_measurements = 0;
+if isfield(payload, 'normalize_measurements')
+    fmdl.normalize_measurements = logical(payload.normalize_measurements);
+end
 
 for i = 1:n_elec
     active_nodes = electrode_nodes(i, 1:electrode_counts(i));
@@ -284,19 +345,31 @@ for i = 1:n_elec
     end
 end
 
-stim_options = {};
-if rotate_meas
-    stim_options{end+1} = 'rotate_meas';
+if isfield(payload, 'stim_matrix') && ~isempty(payload.stim_matrix) && ...
+        isfield(payload, 'meas_matrices') && isfield(payload, 'measurement_counts')
+    stim_matrix = double(payload.stim_matrix);
+    measurement_counts = double(payload.measurement_counts(:));
+    for i = 1:size(stim_matrix, 1)
+        fmdl.stimulation(i).stim_pattern = sparse(stim_matrix(i, :)');
+        count = measurement_counts(i);
+        one_meas = double(payload.meas_matrices(i, 1:count, :));
+        fmdl.stimulation(i).meas_pattern = sparse(reshape(one_meas, count, n_elec));
+    end
 else
-    stim_options{end+1} = 'no_rotate_meas';
+    stim_options = {};
+    if rotate_meas
+        stim_options{end+1} = 'rotate_meas';
+    else
+        stim_options{end+1} = 'no_rotate_meas';
+    end
+    if use_meas_current
+        stim_options{end+1} = 'meas_current';
+    else
+        stim_options{end+1} = 'no_meas_current';
+    end
+    fmdl.stimulation = mk_stim_patterns(n_elec, 1, stim_pattern, meas_pattern, ...
+        stim_options, drive_value);
 end
-if use_meas_current
-    stim_options{end+1} = 'meas_current';
-else
-    stim_options{end+1} = 'no_meas_current';
-end
-fmdl.stimulation = mk_stim_patterns(n_elec, 1, stim_pattern, meas_pattern, ...
-    stim_options, drive_value);
 
 if isfield(cfg, 'measurements_csv') && exist(cfg.measurements_csv, 'file') == 2
     T = readtable(cfg.measurements_csv);

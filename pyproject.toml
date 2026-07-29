@@ -89,6 +89,7 @@ eit-app = "eit_app.app:main"
 eit-backend-worker = "eit_app.backend_worker:main"
 eit-backend-doctor = "eit_app.backend_doctor:main"
 eit-cache = "pyeidors.cache.cli:main"
+pyeidors-interop = "pyeidors.interop.cli:main"
 pyeidors-block-real-amgx = "pyeidors.forward.block_real_amgx:main"
 
 [tool.setuptools.packages.find]

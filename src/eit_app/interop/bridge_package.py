@@ -13,12 +13,14 @@ from scipy.io import loadmat, savemat
 
 from eit_app.models.forward_model_config import ForwardModelConfig
 from pyeidors.interop import (
-    STANDARD_INTEROP_FORMAT,
+    SUPPORTED_INTEROP_FORMATS,
     export_forward_csv,
     load_forward_csv,
     save_exchange_mat,
+    validate_exchange_payload,
 )
 from pyeidors.io._json import json_ready
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
 from .matlab_templates import CAPTURE_SCRIPT_TEMPLATE, RUN_IN_EIDORS_TEMPLATE
 from .models import (
@@ -108,7 +110,10 @@ def save_bridge_package(
 
     if geometry_payload is not None:
         geometry_path = root / GEOMETRY_NAME
-        if geometry_payload.get("exchange_format") == STANDARD_INTEROP_FORMAT:
+        exchange_format = str(
+            np.asarray(geometry_payload.get("exchange_format", "")).reshape(-1)[0]
+        )
+        if exchange_format in SUPPORTED_INTEROP_FORMATS:
             save_exchange_mat(geometry_path, geometry_payload)
         else:
             savemat(geometry_path, geometry_payload)
@@ -116,10 +121,14 @@ def save_bridge_package(
 
     if measurements:
         if {"homogeneous", "target"}.issubset(measurements):
-            homogeneous = np.asarray(measurements["homogeneous"], dtype=float).reshape(
-                -1
-            )
-            target = np.asarray(measurements["target"], dtype=float).reshape(-1)
+            homogeneous = real_array_if_zero_imaginary(
+                measurements["homogeneous"],
+                name="homogeneous Bridge measurements",
+            ).reshape(-1)
+            target = real_array_if_zero_imaginary(
+                measurements["target"],
+                name="target Bridge measurements",
+            ).reshape(-1)
             export_forward_csv(root / MEASUREMENTS_CSV_NAME, homogeneous, target)
             files["measurements_csv"] = MEASUREMENTS_CSV_NAME
         else:
@@ -131,10 +140,18 @@ def save_bridge_package(
 
     if forward_model_config is not None:
         config_path = root / CONFIG_NAME
+        config_mapping = forward_model_config.to_mapping()
+        if geometry_payload is not None:
+            config_mapping.update(
+                {
+                    "mesh_source": "interop",
+                    "mesh_path": GEOMETRY_NAME,
+                }
+            )
         config_path.write_text(
             json.dumps(
                 {
-                    "forward_model_config": forward_model_config.to_mapping(),
+                    "forward_model_config": config_mapping,
                     "exchange_format": BRIDGE_PACKAGE_FORMAT_V2,
                 },
                 ensure_ascii=False,
@@ -261,6 +278,8 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
         )
         config = ForwardModelConfig.from_mapping(
             {
+                "mesh_source": "interop",
+                "mesh_path": str(source.resolve()),
                 "mesh_dimension": 3
                 if np.asarray(payload.get("nodes", np.zeros((0, 2)))).shape[1] >= 3
                 else 2,
@@ -299,6 +318,11 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
                 "contact_impedance": geometry_payload.get("contact_impedance"),
             }
         )
+    if forward_model_config is not None and geometry_path.exists():
+        forward_model_config = forward_model_config.with_overrides(
+            mesh_source="interop",
+            mesh_path=str(geometry_path.resolve()),
+        )
 
     return LoadedBridgePackage(
         root=root,
@@ -308,3 +332,141 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
         forward_model_config=forward_model_config,
         reconstruction_preset=_load_reconstruction_preset(root, manifest),
     )
+
+
+def validate_bridge_package(path: str | Path) -> dict[str, Any]:
+    """Validate a Bridge Package v2 directory or a standalone geometry MAT."""
+
+    source = Path(path)
+    errors: list[str] = []
+    warnings: list[str] = []
+    report: dict[str, Any] = {
+        "schema": "eidors_pyeidors_bridge_validation_v1",
+        "path": str(source.resolve()),
+        "valid": False,
+        "package_format": "",
+        "geometry_format": "",
+        "dimension": None,
+        "cell_type": "",
+        "n_nodes": 0,
+        "n_elements": 0,
+        "n_boundary_facets": 0,
+        "n_electrodes": 0,
+        "n_stimulations": 0,
+        "n_measurements": 0,
+        "electrode_definition": "",
+        "files": {},
+        "warnings": warnings,
+        "errors": errors,
+    }
+    if not source.exists():
+        errors.append(f"Path does not exist: {source}")
+        return report
+
+    if source.is_file() and source.suffix.lower() == ".mat":
+        root = source.parent
+        manifest = default_manifest(
+            source_framework="unknown",
+            package_kind="standalone_geometry",
+            files={"geometry": source.name},
+        )
+        geometry_path = source
+        warnings.append(
+            "Standalone geometry MAT has no Bridge Package manifest/config."
+        )
+    else:
+        root = source if source.is_dir() else source.parent
+        manifest_path = root / MANIFEST_NAME
+        if not manifest_path.is_file():
+            errors.append(f"Missing {MANIFEST_NAME}")
+            return report
+        try:
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = InteropBridgeManifest.from_mapping(manifest_payload)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"Invalid {MANIFEST_NAME}: {exc}")
+            return report
+        report["package_format"] = manifest.exchange_format
+        if manifest.exchange_format != BRIDGE_PACKAGE_FORMAT_V2:
+            errors.append(
+                f"manifest.exchange_format must be {BRIDGE_PACKAGE_FORMAT_V2!r}"
+            )
+        for role, name in sorted(manifest.files.items()):
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts:
+                errors.append(
+                    f"manifest file role {role!r} must use a safe relative path"
+                )
+                continue
+            candidate = root / relative
+            report["files"][role] = str(relative)
+            if not candidate.is_file():
+                errors.append(f"manifest file role {role!r} does not exist: {relative}")
+        geometry_name = manifest.files.get("geometry", GEOMETRY_NAME)
+        geometry_path = root / geometry_name
+
+    if not geometry_path.is_file():
+        errors.append(f"Missing geometry MAT: {geometry_path.name}")
+        return report
+    try:
+        geometry = _public_mat_payload(
+            loadmat(geometry_path, squeeze_me=True, struct_as_record=False)
+        )
+        validate_exchange_payload(geometry)
+    except (OSError, TypeError, ValueError) as exc:
+        errors.append(f"Invalid geometry MAT: {exc}")
+        return report
+
+    nodes = np.asarray(geometry["nodes"])
+    elems = np.atleast_2d(np.asarray(geometry["elems"]))
+    boundary_key = (
+        "boundary_facets" if "boundary_facets" in geometry else "boundary_edges"
+    )
+    boundary = np.atleast_2d(np.asarray(geometry[boundary_key]))
+    dimension = int(nodes.shape[1])
+    report.update(
+        {
+            "geometry_format": str(
+                np.asarray(geometry["exchange_format"]).reshape(-1)[0]
+            ),
+            "dimension": dimension,
+            "cell_type": str(
+                np.asarray(
+                    geometry.get(
+                        "cell_type",
+                        "triangle" if dimension == 2 else "tetrahedron",
+                    )
+                ).reshape(-1)[0]
+            ),
+            "n_nodes": int(nodes.shape[0]),
+            "n_elements": int(elems.shape[0]),
+            "n_boundary_facets": int(boundary.shape[0]),
+            "n_electrodes": int(np.asarray(geometry["n_elec"]).reshape(-1)[0]),
+            "electrode_definition": (
+                "point_or_lower_dimensional"
+                if np.any(
+                    np.asarray(
+                        geometry["electrode_node_counts"],
+                        dtype=np.int64,
+                    ).reshape(-1)
+                    < dimension
+                )
+                else "surface_nodes"
+            ),
+        }
+    )
+    if "stim_matrix" in geometry:
+        stim = np.asarray(geometry["stim_matrix"])
+        report["n_stimulations"] = int(1 if stim.ndim == 1 else stim.shape[0])
+    if "measurement_counts" in geometry:
+        report["n_measurements"] = int(
+            np.sum(np.asarray(geometry["measurement_counts"], dtype=np.int64))
+        )
+    else:
+        measurements = _load_measurements(root, manifest)
+        if measurements:
+            first = next(iter(measurements.values()))
+            report["n_measurements"] = int(np.asarray(first).size)
+
+    report["valid"] = not errors
+    return report

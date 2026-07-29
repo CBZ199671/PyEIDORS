@@ -28,7 +28,7 @@ for source_path in (ROOT, SRC):
         sys.path.insert(0, str(source_path))
 
 from pyeidors.interop.geometry_exchange import (
-    STANDARD_INTEROP_FORMAT,
+    LEGACY_INTEROP_FORMAT,
     build_mesh_from_exchange_mat,
     save_exchange_mat,
 )
@@ -358,7 +358,7 @@ def generate_true_circle_mesh(
     json_path = output_path / "cem_continuum_common_p1.json"
     write_gmsh22(msh_path, nodes, cells, tagged_edges, geometry.n_electrodes)
     payload = {
-        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "exchange_format": LEGACY_INTEROP_FORMAT,
         "source_framework": "true_circle_gmsh_cad",
         "nodes": nodes,
         "elems": cells + 1,
@@ -668,7 +668,7 @@ def _write_case_fixture(
     )
     write_gmsh22(msh_path, nodes, cells, tagged_edges, GEOMETRY.n_electrodes)
     payload = {
-        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "exchange_format": LEGACY_INTEROP_FORMAT,
         "source_framework": "true_circle_gmsh_cad",
         "nodes": nodes,
         "elems": cells + 1,

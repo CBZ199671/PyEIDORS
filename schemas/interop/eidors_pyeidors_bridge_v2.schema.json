@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyeidors.org/schemas/eidors_pyeidors_bridge_v2.schema.json",
+  "title": "EIDORS-PyEIDORS Bridge Package v2 manifest",
+  "type": "object",
+  "required": [
+    "exchange_format",
+    "source_framework",
+    "package_kind",
+    "files"
+  ],
+  "properties": {
+    "exchange_format": {
+      "const": "eidors_pyeidors_bridge_v2"
+    },
+    "source_framework": {
+      "enum": [
+        "eidors",
+        "pyeidors",
+        "unknown"
+      ]
+    },
+    "package_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at_utc": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "object"
+    },
+    "capabilities": {
+      "type": "object"
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "geometry"
+      ],
+      "properties": {
+        "geometry": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "config": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "measurements_csv": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "measurements_mat": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "reconstruction_preset": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "capture_script": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "run_in_eidors": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "run_import_from_pyeidors": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/relativePath"
+      }
+    },
+    "script_path": {
+      "type": "string"
+    },
+    "script_kind": {
+      "type": "string"
+    },
+    "script_hints": {
+      "type": "object"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "(^[/\\\\])|(^[A-Za-z]:)|(^|[/\\\\])\\.\\.([/\\\\]|$)"
+      }
+    }
+  }
+}

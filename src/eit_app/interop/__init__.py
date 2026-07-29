@@ -4,6 +4,7 @@ from .bridge_package import (
     LoadedBridgePackage,
     load_bridge_package,
     save_bridge_package,
+    validate_bridge_package,
 )
 from .environment import EidorsEnvironmentDetector, InteropSettingsStore
 from .models import (
@@ -47,4 +48,5 @@ __all__ = [
     "detect_script_hints",
     "load_bridge_package",
     "save_bridge_package",
+    "validate_bridge_package",
 ]
