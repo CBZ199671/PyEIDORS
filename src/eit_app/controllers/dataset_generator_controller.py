@@ -68,6 +68,7 @@ class _DatasetGeneratorWorker(QObject):
                     "noise_level": cfg.noise_level,
                 }
             )
+            forward_cfg.require_interop_forward_ready()
             total_electrodes = _total_electrode_count(forward_cfg)
             pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
                 mesh_tdim=forward_cfg.mesh_dimension,

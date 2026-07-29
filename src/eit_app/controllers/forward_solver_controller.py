@@ -679,7 +679,7 @@ def _forward_timing_metadata(
 
 
 def _forward_config_from_request(req: ForwardSolverRequest) -> ForwardModelConfig:
-    return ForwardModelConfig.from_mapping(
+    config = ForwardModelConfig.from_mapping(
         req.forward_model_config
         or {
             "mesh_dimension": req.mesh_dimension,
@@ -689,6 +689,8 @@ def _forward_config_from_request(req: ForwardSolverRequest) -> ForwardModelConfi
             "noise_level": req.noise_level,
         }
     )
+    config.require_interop_forward_ready()
+    return config
 
 
 def _pattern_and_electrode_count(

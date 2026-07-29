@@ -1,5 +1,5 @@
 %% Ordinary EIDORS 2D model for Bridge Package v2 capture
-imdl = mk_common_model('c2c2', 16);
+imdl = mk_common_model('c2C2', 16);
 fmdl = imdl.fwd_model;
 fmdl.name = 'EIDORS 2D quickstart';
 fmdl.stimulation = mk_stim_patterns( ...

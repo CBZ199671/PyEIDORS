@@ -157,6 +157,8 @@ def test_interop_exporter_writes_runtime_artifacts(tmp_path: Path) -> None:
     payload = json.loads((root / "bridge_runtime.json").read_text(encoding="utf-8"))
     assert payload["stim_pattern"] == "{ad}"
     assert "startup.m" in payload["eidors_startup"]
+    assert payload["measurements_csv"].endswith("measurements.csv")
+    assert payload["measurements_mat"].endswith("measurements.mat")
 
 
 @pytest.mark.gui
@@ -601,9 +603,10 @@ def test_v128_tools_menu_opens_interop_hub_dialog(
 
 
 def test_v129_matlab_bridge_templates_match_real_eidors_roundtrip() -> None:
-    assert "evalin('caller', 'fmdl')" in CAPTURE_SCRIPT_TEMPLATE
-    assert "imdl_candidate = evalin('caller', 'imdl')" in CAPTURE_SCRIPT_TEMPLATE
-    assert "img_candidate = evalin('caller', 'img')" in CAPTURE_SCRIPT_TEMPLATE
+    assert "local_discover_workspace" in CAPTURE_SCRIPT_TEMPLATE
+    assert "vars = evalin('caller', 'whos')" in CAPTURE_SCRIPT_TEMPLATE
+    assert "nested_path = [name, '.fwd_model']" in CAPTURE_SCRIPT_TEMPLATE
+    assert "Multiple EIDORS %s objects were discovered" in CAPTURE_SCRIPT_TEMPLATE
 
     assert "mk_common_gridmdl('backproj')" not in RUN_IN_EIDORS_TEMPLATE
     assert "pyeidors_bridge_homogeneous" in RUN_IN_EIDORS_TEMPLATE

@@ -259,6 +259,28 @@ def test_v740_point_electrodes_expand_to_unique_incident_facets(
         assert np.count_nonzero(mesh.facet_tags.values == tag) >= 1
 
 
+def test_v743_legacy_distributed_point_sets_require_projection(
+    tmp_path: Path,
+) -> None:
+    payload = make_standard_payload()
+    payload["electrode_nodes"] = np.array([[1, 3], [2, 4]], dtype=np.int64)
+    payload["electrode_node_counts"] = np.array([2, 2], dtype=np.int64)
+    payload["n_elec"] = 2
+    out_mat = tmp_path / "distributed_point_electrodes.mat"
+    save_exchange_mat(out_mat, payload)
+
+    mesh, _ = build_mesh_from_exchange_mat(out_mat)
+
+    assert mesh.source_electrode_models == [
+        "distributed_point",
+        "distributed_point",
+    ]
+    assert mesh.electrode_projection == "incident_boundary_facets"
+    for electrode in range(1, 3):
+        tag = mesh.association_table[f"electrode_{electrode}"]
+        assert np.count_nonzero(mesh.facet_tags.values == tag) >= 1
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

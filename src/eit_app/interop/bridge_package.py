@@ -19,6 +19,7 @@ from pyeidors.interop import (
     save_exchange_mat,
     validate_exchange_payload,
 )
+from pyeidors.interop.geometry_exchange import source_electrode_models
 from pyeidors.io._json import json_ready
 from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
@@ -121,16 +122,28 @@ def save_bridge_package(
 
     if measurements:
         if {"homogeneous", "target"}.issubset(measurements):
-            homogeneous = real_array_if_zero_imaginary(
-                measurements["homogeneous"],
-                name="homogeneous Bridge measurements",
-            ).reshape(-1)
-            target = real_array_if_zero_imaginary(
-                measurements["target"],
-                name="target Bridge measurements",
-            ).reshape(-1)
-            export_forward_csv(root / MEASUREMENTS_CSV_NAME, homogeneous, target)
-            files["measurements_csv"] = MEASUREMENTS_CSV_NAME
+            try:
+                homogeneous = real_array_if_zero_imaginary(
+                    measurements["homogeneous"],
+                    name="homogeneous Bridge measurements",
+                ).reshape(-1)
+                target = real_array_if_zero_imaginary(
+                    measurements["target"],
+                    name="target Bridge measurements",
+                ).reshape(-1)
+            except (TypeError, ValueError):
+                savemat(
+                    root / MEASUREMENTS_MAT_NAME,
+                    {key: np.asarray(value) for key, value in measurements.items()},
+                )
+                files["measurements_mat"] = MEASUREMENTS_MAT_NAME
+            else:
+                export_forward_csv(
+                    root / MEASUREMENTS_CSV_NAME,
+                    homogeneous,
+                    target,
+                )
+                files["measurements_csv"] = MEASUREMENTS_CSV_NAME
         else:
             savemat(
                 root / MEASUREMENTS_MAT_NAME,
@@ -236,6 +249,30 @@ def _public_mat_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if not key.startswith("__")}
 
 
+def _contact_config_value(payload: dict[str, Any]) -> Any:
+    if "contact_impedance" not in payload:
+        return None
+    values = np.asarray(payload["contact_impedance"]).reshape(-1)
+    if values.size == 0:
+        return None
+    present = np.asarray(
+        payload.get("contact_impedance_present", np.ones(values.size, dtype=bool)),
+        dtype=bool,
+    ).reshape(-1)
+    if present.size == 1:
+        present = np.full(values.size, bool(present[0]), dtype=bool)
+    if present.size != values.size or not np.all(present):
+        return None
+
+    def scalar(item: Any) -> float | complex:
+        number = complex(item)
+        return float(number.real) if abs(number.imag) <= 1.0e-15 else number
+
+    if values.size == 1:
+        return scalar(values[0])
+    return [scalar(item) for item in values]
+
+
 def _load_measurements(
     root: Path, manifest: InteropBridgeManifest
 ) -> dict[str, np.ndarray] | None:
@@ -284,7 +321,7 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
                 if np.asarray(payload.get("nodes", np.zeros((0, 2)))).shape[1] >= 3
                 else 2,
                 "n_elec": int(np.asarray(payload.get("n_elec", 16)).reshape(-1)[0]),
-                "contact_impedance": payload.get("contact_impedance"),
+                "contact_impedance": _contact_config_value(payload),
             }
         )
         return LoadedBridgePackage(
@@ -315,7 +352,7 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
                 "n_elec": int(
                     np.asarray(geometry_payload.get("n_elec", 16)).reshape(-1)[0]
                 ),
-                "contact_impedance": geometry_payload.get("contact_impedance"),
+                "contact_impedance": _contact_config_value(geometry_payload),
             }
         )
     if forward_model_config is not None and geometry_path.exists():
@@ -355,6 +392,21 @@ def validate_bridge_package(path: str | Path) -> dict[str, Any]:
         "n_stimulations": 0,
         "n_measurements": 0,
         "electrode_definition": "",
+        "electrode_models": [],
+        "contact_impedance_present": [],
+        "contact_impedance_unit": "",
+        "background_present": None,
+        "stimulation_supported": None,
+        "current_density_present": None,
+        "current_density_applied": None,
+        "stim_positive_current": [],
+        "stim_negative_current": [],
+        "stim_net_current": [],
+        "stim_max_abs_current": [],
+        "stim_balanced": [],
+        "forward_ready": None,
+        "forward_blockers": [],
+        "forward_warnings": [],
         "files": {},
         "warnings": warnings,
         "errors": errors,
@@ -455,6 +507,111 @@ def validate_bridge_package(path: str | Path) -> dict[str, Any]:
             ),
         }
     )
+    metadata: dict[str, Any] = {}
+    if "capture_metadata_json" in geometry:
+        metadata_raw = np.asarray(geometry["capture_metadata_json"]).reshape(-1)
+        if metadata_raw.size:
+            try:
+                parsed = json.loads(str(metadata_raw[0]))
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except (TypeError, ValueError, json.JSONDecodeError):
+                warnings.append("capture_metadata_json could not be decoded.")
+    electrode_models = source_electrode_models(geometry)
+    report["electrode_models"] = electrode_models
+    if electrode_models:
+        report["electrode_definition"] = (
+            "point_or_distributed_point"
+            if any(
+                model in {"point", "distributed_point"} for model in electrode_models
+            )
+            else "complete_electrode_model"
+        )
+    contact_present = np.asarray(
+        geometry.get(
+            "contact_impedance_present",
+            np.ones(report["n_electrodes"], dtype=bool),
+        ),
+        dtype=bool,
+    ).reshape(-1)
+    if contact_present.size == 1:
+        contact_present = np.full(
+            report["n_electrodes"],
+            bool(contact_present[0]),
+            dtype=bool,
+        )
+    report["contact_impedance_present"] = contact_present.tolist()
+    if "contact_impedance_unit" in geometry:
+        report["contact_impedance_unit"] = str(
+            np.asarray(geometry["contact_impedance_unit"]).reshape(-1)[0]
+        )
+    report["background_present"] = bool(
+        np.asarray(geometry.get("background_present", True)).reshape(-1)[0]
+    )
+    if "stimulation_supported" in geometry:
+        report["stimulation_supported"] = bool(
+            np.asarray(geometry["stimulation_supported"]).reshape(-1)[0]
+        )
+    if "current_density_present" in geometry:
+        report["current_density_present"] = bool(
+            np.asarray(geometry["current_density_present"]).reshape(-1)[0]
+        )
+    if "current_density_applied" in geometry:
+        report["current_density_applied"] = bool(
+            np.asarray(geometry["current_density_applied"]).reshape(-1)[0]
+        )
+    for source_name, report_name in (
+        ("stim_positive_current", "stim_positive_current"),
+        ("stim_negative_current", "stim_negative_current"),
+        ("stim_net_current", "stim_net_current"),
+        ("stim_max_abs_current", "stim_max_abs_current"),
+        ("stim_balanced", "stim_balanced"),
+    ):
+        if source_name in geometry:
+            report[report_name] = json_ready(
+                np.asarray(geometry[source_name]).reshape(-1)
+            )
+    blockers = [str(item) for item in metadata.get("forward_blockers", []) if str(item)]
+    if not np.all(contact_present):
+        blockers.append("contact_impedance_missing_no_eidors_default")
+    if not report["background_present"]:
+        background_elem_present = bool(
+            np.asarray(
+                geometry.get(
+                    "background_elem_data_present",
+                    "background_elem_data" in geometry,
+                )
+            ).reshape(-1)[0]
+        )
+        background_elem_data = np.asarray(geometry.get("background_elem_data", []))
+        blockers.append(
+            "background_is_nonuniform_and_not_gui_scalar_compatible"
+            if background_elem_present and background_elem_data.size
+            else "background_image_missing_or_unmappable"
+        )
+    if report["electrode_definition"] == "point_or_lower_dimensional" or any(
+        model in {"point", "distributed_point"} for model in electrode_models
+    ):
+        blockers.append(
+            "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
+        )
+    if report["stimulation_supported"] is False:
+        blockers.append(
+            "stimulation_missing_or_unsupported_voltage_interior_complex_pattern"
+        )
+    blockers = list(dict.fromkeys(blockers))
+    forward_notes = [
+        str(item) for item in metadata.get("forward_warnings", []) if str(item)
+    ]
+    report["forward_blockers"] = blockers
+    report["forward_warnings"] = forward_notes
+    report["forward_ready"] = not blockers
+    warnings.extend(forward_notes)
+    if blockers:
+        warnings.append(
+            "Geometry is valid, but an equivalent PyEIDORS forward solve is "
+            "blocked: " + ", ".join(blockers)
+        )
     if "stim_matrix" in geometry:
         stim = np.asarray(geometry["stim_matrix"])
         report["n_stimulations"] = int(1 if stim.ndim == 1 else stim.shape[0])

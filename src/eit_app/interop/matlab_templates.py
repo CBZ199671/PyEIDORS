@@ -37,15 +37,24 @@ cleanup = onCleanup(@() cd(orig_dir));
 cd(script_dir);
 run(target_script);
 
-fmdl = local_pick_fmdl();
-imdl = local_pick_imdl();
-img = local_pick_image();
-vh = local_pick_data({'vh', 'vhom', 'data_homogeneous'});
-vi = local_pick_data({'vi', 'vtarget', 'data_target', 'v'});
-
-if isempty(fmdl)
-    error('No fwd_model could be discovered from the target script workspace.');
-end
+catalog = local_discover_workspace();
+[img_bg, img_bg_source, img_bg_selection] = local_select_optional_role( ...
+    catalog.images, cfg, 'background_image_var', ...
+    {'img_bg', 'img_bkgnd', 'img_background', 'img_homogeneous', ...
+     'background_image'}, {}, false);
+[img_target, img_target_source, img_target_selection] = local_select_optional_role( ...
+    catalog.images, cfg, 'target_image_var', ...
+    {'img_truth', 'img_target', 'img_phantom', 'target_image', 'img'}, ...
+    {img_bg_source}, true);
+[fmdl, fmdl_source, fmdl_selection] = local_select_model( ...
+    catalog.models, cfg, {img_bg, img_target});
+[vh, vh_source, vh_selection] = local_select_optional_role( ...
+    catalog.data, cfg, 'homogeneous_data_var', ...
+    {'vh', 'vhom', 'data_homogeneous', 'data_background'}, {}, false);
+[vi, vi_source, vi_selection] = local_select_optional_role( ...
+    catalog.data, cfg, 'target_data_var', ...
+    {'vi', 'vtarget', 'data_target', 'data_phantom', 'v'}, ...
+    {vh_source}, false);
 
 out_dir = char(cfg.output_dir);
 if exist(out_dir, 'dir') ~= 7
@@ -74,15 +83,103 @@ else
     boundary_facets = double(find_boundary(fmdl.elems));
 end
 boundary_edges = boundary_facets; % v1/MATLAB compatibility alias
-[electrode_nodes, electrode_node_counts, contact_impedance] = local_build_electrode_node_arrays(fmdl);
-[stim_matrix, meas_matrices, measurement_counts] = local_build_pattern_arrays(fmdl);
+[electrode_nodes, electrode_node_counts, electrode_faces, ...
+ electrode_face_counts, electrode_model, contact_impedance, ...
+ contact_impedance_present, electrode_projection_required] = ...
+    local_build_electrode_arrays(fmdl, boundary_facets, dimension);
+[stim_matrix_raw, stim_matrix, meas_matrices, measurement_counts, ...
+ volt_matrix, volt_pattern_present, interior_sources, ...
+ interior_source_counts, stimulation_labels, current_density, ...
+ current_density_present, current_density_applied, ...
+ stim_positive_current, stim_negative_current, stim_net_current, ...
+ stim_max_abs_current, stim_balanced, stimulation_supported] = ...
+    local_build_pattern_arrays(fmdl);
 n_elec = double(numel(fmdl.electrode));
-normalize_measurements = double(local_normalize_measurements(fmdl));
-background = local_background_value(img);
-truth_elem_data = local_truth_elem_data(img, background, size(elems, 1));
+[normalize_measurements, normalize_measurements_present, ...
+ normalize_measurements_source] = local_normalize_measurements(fmdl);
+[gnd_node, gnd_node_present, effective_gnd_node, ...
+ effective_gnd_node_source] = local_ground_node(fmdl);
+background_image = local_resolve_image(img_bg, fmdl, img_bg_source, ...
+    img_bg_selection, 'background');
+target_image = local_resolve_image(img_target, fmdl, img_target_source, ...
+    img_target_selection, 'target');
+background_present = background_image.scalar_present;
+background = background_image.scalar_value;
+background_elem_data_present = background_image.present;
+background_elem_data = background_image.elem_data;
+truth_elem_data_present = target_image.present;
+truth_elem_data = target_image.elem_data;
+target_elem_data = target_image.elem_data;
 mesh_name = local_mesh_name(fmdl, target_script);
 mesh_level = 'script_capture';
 scenario_name = local_script_kind(cfg);
+[model_valid, model_validation_error] = local_validate_fwd_model(fmdl);
+model_solver = local_function_name(local_field_or_empty(fmdl, 'solve'));
+effective_model_solver = local_effective_function_name(model_solver, 'fwd_solve');
+model_system_mat = local_function_name(local_field_or_empty(fmdl, 'system_mat'));
+effective_model_system_mat = local_effective_function_name( ...
+    model_system_mat, 'calc_system_mat');
+model_jacobian = local_function_name(local_field_or_empty(fmdl, 'jacobian'));
+model_measured_quantity = local_text_field(fmdl, 'measured_quantity', ...
+    'unspecified');
+model_coordinate_units = local_text_field(fmdl, 'units', 'unspecified');
+contact_impedance_unit = local_contact_impedance_unit(dimension, ...
+    model_coordinate_units);
+[forward_blockers, forward_warnings] = local_forward_readiness( ...
+    model_valid, model_validation_error, contact_impedance_present, ...
+    electrode_projection_required, background_image, target_image, ...
+    stimulation_supported, effective_model_solver, gnd_node_present, ...
+    effective_gnd_node_source);
+
+capture_metadata = struct();
+capture_metadata.schema = 'eidors_pyeidors_capture_semantics_v1';
+capture_metadata.eidors_version = eidors_obj('eidors_version');
+capture_metadata.selected.fwd_model = local_selection_record( ...
+    fmdl_source, fmdl_selection);
+capture_metadata.selected.background_image = local_selection_record( ...
+    img_bg_source, img_bg_selection);
+capture_metadata.selected.target_image = local_selection_record( ...
+    img_target_source, img_target_selection);
+capture_metadata.selected.homogeneous_data = local_selection_record( ...
+    vh_source, vh_selection);
+capture_metadata.selected.target_data = local_selection_record( ...
+    vi_source, vi_selection);
+capture_metadata.model.valid = model_valid;
+capture_metadata.model.validation_error = model_validation_error;
+capture_metadata.model.solver_declared = model_solver;
+capture_metadata.model.solver_effective = effective_model_solver;
+capture_metadata.model.system_mat_declared = model_system_mat;
+capture_metadata.model.system_mat_effective = effective_model_system_mat;
+capture_metadata.model.jacobian_declared = model_jacobian;
+capture_metadata.model.measured_quantity = model_measured_quantity;
+capture_metadata.model.coordinate_units = model_coordinate_units;
+capture_metadata.model.contact_impedance_unit = contact_impedance_unit;
+capture_metadata.model.coarse2fine = local_field_shape_record( ...
+    fmdl, 'coarse2fine');
+capture_metadata.model.background = local_field_shape_record( ...
+    fmdl, 'background');
+capture_metadata.model.model_reduction = local_field_shape_record( ...
+    fmdl, 'model_reduction');
+capture_metadata.fields.contact_impedance = local_presence_record( ...
+    contact_impedance_present, 'electrode(i).z_contact', ...
+    'EIDORS valid_fwd_model requires the field; no solver default exists.');
+capture_metadata.fields.normalize_measurements = local_runtime_record( ...
+    normalize_measurements_present, normalize_measurements_source);
+capture_metadata.fields.gnd_node = local_runtime_record( ...
+    gnd_node_present, effective_gnd_node_source);
+capture_metadata.fields.stimulation = local_presence_record( ...
+    ~isempty(stim_matrix_raw), 'fwd_model.stimulation', ...
+    'Raw and EIDORS-effective patterns are stored separately.');
+capture_metadata.fields.background_image = local_image_record(background_image);
+capture_metadata.fields.target_image = local_image_record(target_image);
+capture_metadata.electrode_models = electrode_model;
+capture_metadata.current_density.present = current_density_present;
+capture_metadata.current_density.value = current_density;
+capture_metadata.current_density.applied = current_density_applied;
+capture_metadata.forward_ready = isempty(forward_blockers);
+capture_metadata.forward_blockers = forward_blockers;
+capture_metadata.forward_warnings = forward_warnings;
+capture_metadata_json = jsonencode(capture_metadata);
 
 save(fullfile(out_dir, 'geometry.mat'), ...
     'exchange_format', ...
@@ -98,14 +195,58 @@ save(fullfile(out_dir, 'geometry.mat'), ...
     'boundary_facets', ...
     'electrode_nodes', ...
     'electrode_node_counts', ...
+    'electrode_faces', ...
+    'electrode_face_counts', ...
+    'electrode_model', ...
+    'electrode_projection_required', ...
+    'stim_matrix_raw', ...
     'stim_matrix', ...
     'meas_matrices', ...
     'measurement_counts', ...
+    'volt_matrix', ...
+    'volt_pattern_present', ...
+    'interior_sources', ...
+    'interior_source_counts', ...
+    'stimulation_labels', ...
+    'current_density', ...
+    'current_density_present', ...
+    'current_density_applied', ...
+    'stim_positive_current', ...
+    'stim_negative_current', ...
+    'stim_net_current', ...
+    'stim_max_abs_current', ...
+    'stim_balanced', ...
+    'stimulation_supported', ...
     'n_elec', ...
     'normalize_measurements', ...
+    'normalize_measurements_present', ...
+    'normalize_measurements_source', ...
+    'gnd_node', ...
+    'gnd_node_present', ...
+    'effective_gnd_node', ...
+    'effective_gnd_node_source', ...
     'background', ...
+    'background_present', ...
+    'background_elem_data', ...
+    'background_elem_data_present', ...
     'truth_elem_data', ...
+    'truth_elem_data_present', ...
+    'target_elem_data', ...
     'contact_impedance', ...
+    'contact_impedance_present', ...
+    'contact_impedance_unit', ...
+    'model_solver', ...
+    'effective_model_solver', ...
+    'model_system_mat', ...
+    'effective_model_system_mat', ...
+    'model_jacobian', ...
+    'model_measured_quantity', ...
+    'model_coordinate_units', ...
+    'model_valid', ...
+    'model_validation_error', ...
+    'forward_blockers', ...
+    'forward_warnings', ...
+    'capture_metadata_json', ...
     'mesh_name', ...
     'mesh_level', ...
     'scenario_name');
@@ -114,20 +255,36 @@ if ~isempty(vh) && ~isempty(vi)
     vh_meas = double(vh.meas(:));
     vi_meas = double(vi.meas(:));
     difference = vi_meas - vh_meas;
-    T = table(vh_meas, vi_meas, difference, 'VariableNames', ...
-        {'meas_homogeneous', 'meas_phantom', 'difference'});
-    writetable(T, fullfile(out_dir, 'measurements.csv'));
+    if isreal(vh_meas) && isreal(vi_meas)
+        T = table(vh_meas, vi_meas, difference, 'VariableNames', ...
+            {'meas_homogeneous', 'meas_phantom', 'difference'});
+        writetable(T, fullfile(out_dir, 'measurements.csv'));
+    else
+        homogeneous = vh_meas;
+        target = vi_meas;
+        save(fullfile(out_dir, 'measurements.mat'), ...
+            'homogeneous', 'target', 'difference');
+    end
 end
 
 raw_vars = whos;
 capture_report = struct();
 capture_report.script_path = target_script;
 capture_report.script_kind = local_script_kind(cfg);
-capture_report.fmdl_found = ~isempty(fmdl);
-capture_report.imdl_found = ~isempty(imdl);
-capture_report.img_found = ~isempty(img);
+capture_report.fmdl_found = true;
+capture_report.fmdl_source = fmdl_source;
+capture_report.model_candidates = local_candidate_paths(catalog.models);
+capture_report.image_candidates = local_candidate_paths(catalog.images);
+capture_report.data_candidates = local_candidate_paths(catalog.data);
+capture_report.background_image_source = img_bg_source;
+capture_report.target_image_source = img_target_source;
 capture_report.vh_found = ~isempty(vh);
 capture_report.vi_found = ~isempty(vi);
+capture_report.vh_source = vh_source;
+capture_report.vi_source = vi_source;
+capture_report.forward_ready = isempty(forward_blockers);
+capture_report.forward_blockers = forward_blockers;
+capture_report.forward_warnings = forward_warnings;
 capture_report.workspace_vars = {raw_vars.name};
 json_text = jsonencode(capture_report, PrettyPrint=true);
 fid = fopen(fullfile(out_dir, 'capture_report.json'), 'w');
@@ -135,131 +292,655 @@ fprintf(fid, '%s', json_text);
 fclose(fid);
 end
 
-function value = local_pick_fmdl()
-value = [];
-if evalin('caller', 'exist(''fmdl'', ''var'')')
-    value = evalin('caller', 'fmdl');
-    return;
+function catalog = local_discover_workspace()
+catalog.models = struct('path', {}, 'aliases', {}, 'value', {});
+catalog.images = struct('path', {}, 'aliases', {}, 'value', {});
+catalog.data = struct('path', {}, 'aliases', {}, 'value', {});
+vars = evalin('caller', 'whos');
+for idx = 1:numel(vars)
+    name = vars(idx).name;
+    value = evalin('caller', name);
+    if ~isstruct(value) || numel(value) ~= 1
+        continue;
+    end
+    object_type = local_object_type(value);
+    if strcmp(object_type, 'fwd_model') || ...
+            (isfield(value, 'nodes') && isfield(value, 'elems'))
+        catalog.models = local_append_candidate(catalog.models, name, value);
+    end
+    if strcmp(object_type, 'image') || local_has_image_data(value)
+        catalog.images = local_append_candidate(catalog.images, name, value);
+    end
+    if strcmp(object_type, 'data') || isfield(value, 'meas')
+        catalog.data = local_append_candidate(catalog.data, name, value);
+    end
+    if isfield(value, 'fwd_model') && isstruct(value.fwd_model) && ...
+            numel(value.fwd_model) == 1
+        nested_path = [name, '.fwd_model'];
+        catalog.models = local_append_candidate( ...
+            catalog.models, nested_path, value.fwd_model);
+    end
 end
-if evalin('caller', 'exist(''imdl'', ''var'')')
-    imdl_candidate = evalin('caller', 'imdl');
-    if isstruct(imdl_candidate) && isfield(imdl_candidate, 'fwd_model')
-        value = imdl_candidate.fwd_model;
+end
+
+function object_type = local_object_type(value)
+object_type = '';
+if isstruct(value) && isfield(value, 'type') && ...
+        (ischar(value.type) || isstring(value.type))
+    object_type = char(value.type);
+end
+end
+
+function tf = local_has_image_data(value)
+tf = isfield(value, 'fwd_model') && any(isfield(value, ...
+    {'elem_data', 'node_data', 'conductivity', 'resistivity', ...
+     'log_conductivity', 'log10_conductivity', ...
+     'log_resistivity', 'log10_resistivity'}));
+end
+
+function candidates = local_append_candidate(candidates, path, value)
+for idx = 1:numel(candidates)
+    if isequaln(candidates(idx).value, value)
+        candidates(idx).aliases{end + 1} = path;
         return;
     end
 end
-if evalin('caller', 'exist(''img'', ''var'')')
-    img_candidate = evalin('caller', 'img');
-    if isstruct(img_candidate) && isfield(img_candidate, 'fwd_model')
-        value = img_candidate.fwd_model;
-    end
+record.path = path;
+record.aliases = {path};
+record.value = value;
+candidates(end + 1) = record;
+end
+
+function [value, path, method] = local_select_required( ...
+        candidates, cfg, selector_field, label)
+[value, path, method] = local_select_by_selector( ...
+    candidates, cfg, selector_field, label);
+if ~isempty(value)
     return;
 end
+if isempty(candidates)
+    error('No standard EIDORS %s object was discovered.', label);
+end
+if numel(candidates) > 1
+    error(['Multiple EIDORS %s objects were discovered: %s. ', ...
+           'Select one with %s.'], label, ...
+          strjoin(local_candidate_paths(candidates), ', '), selector_field);
+end
+value = candidates(1).value;
+path = candidates(1).path;
+method = 'unique_standard_object';
 end
 
-function value = local_pick_imdl()
-value = [];
-if evalin('caller', 'exist(''imdl'', ''var'')')
-    value = evalin('caller', 'imdl');
+function [value, path, method] = local_select_model(candidates, cfg, images)
+[value, path, method] = local_select_by_selector( ...
+    candidates, cfg, 'fwd_model_var', 'forward model');
+if ~isempty(value)
+    return;
 end
-end
-
-function value = local_pick_image()
-value = [];
-for name = {'img_truth', 'img', 'img_bg'}
-    candidate = char(name);
-    if evalin('caller', sprintf('exist(''%s'', ''var'')', candidate))
-        value = evalin('caller', candidate);
-        return;
+related = [];
+for image_idx = 1:numel(images)
+    image = images{image_idx};
+    if isempty(image) || ~isstruct(image) || ~isfield(image, 'fwd_model')
+        continue;
     end
-end
-end
-
-function value = local_pick_data(names)
-value = [];
-for idx = 1:numel(names)
-    candidate = char(names{idx});
-    if evalin('caller', sprintf('exist(''%s'', ''var'')', candidate))
-        temp = evalin('caller', candidate);
-        if isstruct(temp) && isfield(temp, 'meas')
-            value = temp;
-            return;
+    for candidate_idx = 1:numel(candidates)
+        if isequaln(candidates(candidate_idx).value, image.fwd_model)
+            related(end + 1) = candidate_idx; %#ok<AGROW>
         end
     end
 end
+related = unique(related);
+if numel(related) == 1
+    value = candidates(related).value;
+    path = candidates(related).path;
+    method = 'referenced_by_selected_image';
+    return;
+elseif numel(related) > 1
+    error(['Selected EIDORS images reference different forward models: %s. ', ...
+           'Use fwd_model_var to choose explicitly.'], ...
+          strjoin(local_candidate_paths(candidates(related)), ', '));
+end
+[value, path, method] = local_select_required( ...
+    candidates, cfg, 'fwd_model_var', 'forward model');
 end
 
-function [electrode_nodes, electrode_node_counts, contact_impedance] = local_build_electrode_node_arrays(fmdl)
+function [value, path, method] = local_select_optional_role( ...
+        candidates, cfg, selector_field, preferred_names, excluded_paths, ...
+        use_single_fallback)
+[value, path, method] = local_select_by_selector( ...
+    candidates, cfg, selector_field, selector_field);
+if ~isempty(value)
+    return;
+end
+matches = [];
+for idx = 1:numel(candidates)
+    if any(strcmp(candidates(idx).path, excluded_paths))
+        continue;
+    end
+    aliases = lower(string(candidates(idx).aliases));
+    if any(ismember(aliases, lower(string(preferred_names))))
+        matches(end + 1) = idx; %#ok<AGROW>
+    end
+end
+if numel(matches) > 1
+    error(['Multiple candidates match inferred role %s: %s. ', ...
+           'Use an explicit selector.'], selector_field, ...
+          strjoin(local_candidate_paths(candidates(matches)), ', '));
+elseif numel(matches) == 1
+    value = candidates(matches).value;
+    path = candidates(matches).path;
+    method = 'inferred_from_conventional_variable_name';
+    return;
+end
+available = [];
+for idx = 1:numel(candidates)
+    if ~any(strcmp(candidates(idx).path, excluded_paths))
+        available(end + 1) = idx; %#ok<AGROW>
+    end
+end
+if use_single_fallback && numel(available) == 1
+    value = candidates(available).value;
+    path = candidates(available).path;
+    method = 'inferred_from_single_unassigned_candidate';
+else
+    value = [];
+    path = '';
+    method = 'missing';
+end
+end
+
+function [value, path, method] = local_select_by_selector( ...
+        candidates, cfg, selector_field, label)
+value = [];
+path = '';
+method = '';
+if ~isfield(cfg, selector_field) || isempty(cfg.(selector_field))
+    return;
+end
+selector = char(cfg.(selector_field));
+for idx = 1:numel(candidates)
+    if any(strcmp(selector, candidates(idx).aliases))
+        value = candidates(idx).value;
+        path = candidates(idx).path;
+        method = 'explicit_selector';
+        return;
+    end
+end
+error('Requested %s selector "%s" was not discovered. Candidates: %s', ...
+    label, selector, strjoin(local_candidate_paths(candidates), ', '));
+end
+
+function paths = local_candidate_paths(candidates)
+paths = cell(1, numel(candidates));
+for idx = 1:numel(candidates)
+    paths{idx} = strjoin(candidates(idx).aliases, '|');
+end
+end
+
+function [electrode_nodes, electrode_node_counts, electrode_faces, ...
+          electrode_face_counts, electrode_model, contact_impedance, ...
+          contact_impedance_present, projection_required] = ...
+          local_build_electrode_arrays(fmdl, boundary_facets, dimension)
 n_elec = numel(fmdl.electrode);
 electrode_node_counts = zeros(n_elec, 1);
 max_nodes = 0;
-contact_impedance = zeros(n_elec, 1);
+max_faces = 0;
+node_lists = cell(n_elec, 1);
+face_lists = cell(n_elec, 1);
+electrode_model = cell(n_elec, 1);
+contact_impedance = NaN(n_elec, 1);
+contact_impedance_present = false(n_elec, 1);
+projection_required = false(n_elec, 1);
 for i = 1:n_elec
-    nodes = double(fmdl.electrode(i).nodes(:)');
-    electrode_node_counts(i) = numel(nodes);
-    max_nodes = max(max_nodes, numel(nodes));
-    if isfield(fmdl.electrode(i), 'z_contact')
-        contact_impedance(i) = double(fmdl.electrode(i).z_contact);
+    elec = fmdl.electrode(i);
+    if ~isfield(elec, 'nodes') || ischar(elec.nodes)
+        error(['Electrode %d does not expose numeric mesh nodes. ', ...
+               'Instrument electrodes are not supported by Geometry v2.'], i);
+    end
+    nodes = double(elec.nodes(:)');
+    faces = zeros(0, dimension);
+    if isfield(elec, 'faces') && ~isempty(elec.faces)
+        faces = double(elec.faces);
+        if size(faces, 2) ~= dimension
+            error('Electrode %d faces must have width %d.', i, dimension);
+        end
+        nodes = unique([nodes(:); faces(:)])';
+        electrode_model{i} = 'cem_faces';
+    elseif numel(nodes) == 1
+        electrode_model{i} = 'point';
+        projection_required(i) = true;
+    elseif numel(nodes) > 1
+        complete = all(ismember(boundary_facets, nodes), 2);
+        faces = boundary_facets(complete, :);
+        if isempty(faces)
+            electrode_model{i} = 'distributed_point';
+            projection_required(i) = true;
+        else
+            electrode_model{i} = 'cem';
+        end
     else
-        contact_impedance(i) = 0.01;
+        error('Electrode %d has zero mesh nodes.', i);
+    end
+    node_lists{i} = nodes;
+    face_lists{i} = faces;
+    electrode_node_counts(i) = numel(nodes);
+    electrode_face_counts(i, 1) = size(faces, 1); %#ok<AGROW>
+    max_nodes = max(max_nodes, numel(nodes));
+    max_faces = max(max_faces, size(faces, 1));
+    if isfield(elec, 'z_contact') && isnumeric(elec.z_contact) && ...
+            isscalar(elec.z_contact)
+        contact_impedance(i) = double(elec.z_contact);
+        contact_impedance_present(i) = true;
     end
 end
 electrode_nodes = zeros(n_elec, max_nodes);
+electrode_faces = zeros(n_elec, max_faces, dimension);
 for i = 1:n_elec
-    nodes = double(fmdl.electrode(i).nodes(:)');
+    nodes = node_lists{i};
     electrode_nodes(i, 1:numel(nodes)) = nodes;
-end
-if numel(unique(contact_impedance)) == 1
-    contact_impedance = contact_impedance(1);
+    faces = face_lists{i};
+    electrode_faces(i, 1:size(faces, 1), :) = ...
+        reshape(faces, 1, size(faces, 1), dimension);
 end
 end
 
-function [stim_matrix, meas_matrices, measurement_counts] = local_build_pattern_arrays(fmdl)
+function [stim_matrix_raw, stim_matrix, meas_matrices, measurement_counts, ...
+          volt_matrix, volt_pattern_present, interior_sources, ...
+          interior_source_counts, stimulation_labels, current_density, ...
+          current_density_present, current_density_applied, ...
+          positive_current, negative_current, net_current, ...
+          max_abs_current, balanced, supported] = ...
+          local_build_pattern_arrays(fmdl)
 n_elec = numel(fmdl.electrode);
+current_density = NaN;
+current_density_present = isfield(fmdl, 'current_density') && ...
+    ~isempty(fmdl.current_density);
+current_density_applied = false;
+if current_density_present && isnumeric(fmdl.current_density) && ...
+        isscalar(fmdl.current_density)
+    current_density = double(fmdl.current_density);
+    current_density_applied = isfinite(current_density) && current_density > 0;
+end
 if ~isfield(fmdl, 'stimulation') || isempty(fmdl.stimulation)
+    stim_matrix_raw = zeros(0, n_elec);
     stim_matrix = zeros(0, n_elec);
     meas_matrices = zeros(0, 0, n_elec);
     measurement_counts = zeros(0, 1);
+    volt_matrix = zeros(0, n_elec);
+    volt_pattern_present = false(0, 1);
+    interior_sources = zeros(0, 0);
+    interior_source_counts = zeros(0, 1);
+    stimulation_labels = cell(0, 1);
+    positive_current = zeros(0, 1);
+    negative_current = zeros(0, 1);
+    net_current = zeros(0, 1);
+    max_abs_current = zeros(0, 1);
+    balanced = false(0, 1);
+    supported = false;
     return;
 end
 n_stim = numel(fmdl.stimulation);
 measurement_counts = zeros(n_stim, 1);
+interior_source_counts = zeros(n_stim, 1);
 max_measurements = 0;
-stim_matrix = zeros(n_stim, n_elec);
+max_interior = 0;
+stim_matrix_raw = zeros(n_stim, n_elec);
+volt_matrix = zeros(n_stim, n_elec);
+volt_pattern_present = false(n_stim, 1);
+stimulation_labels = cell(n_stim, 1);
+supported = true;
 for i = 1:n_stim
-    stim_matrix(i, :) = full(double(fmdl.stimulation(i).stim_pattern(:)'));
-    measurement_counts(i) = size(fmdl.stimulation(i).meas_pattern, 1);
+    stim = fmdl.stimulation(i);
+    if ~isfield(stim, 'stim_pattern') || ...
+            numel(stim.stim_pattern) ~= n_elec
+        supported = false;
+        continue;
+    end
+    stim_matrix_raw(i, :) = full(double(stim.stim_pattern(:)'));
+    if isfield(stim, 'meas_pattern')
+        measurement_counts(i) = size(stim.meas_pattern, 1);
+    else
+        supported = false;
+    end
     max_measurements = max(max_measurements, measurement_counts(i));
+    if isfield(stim, 'volt_pattern') && ~isempty(stim.volt_pattern)
+        if numel(stim.volt_pattern) == n_elec
+            volt_matrix(i, :) = full(double(stim.volt_pattern(:)'));
+        end
+        volt_pattern_present(i) = true;
+        supported = false;
+    end
+    if isfield(stim, 'interior_sources') && ~isempty(stim.interior_sources)
+        interior_source_counts(i) = numel(stim.interior_sources);
+        max_interior = max(max_interior, interior_source_counts(i));
+        supported = false;
+    end
+    if isfield(stim, 'stimulation') && ~isempty(stim.stimulation)
+        stimulation_labels{i} = char(stim.stimulation);
+    else
+        stimulation_labels{i} = 'unspecified';
+    end
+end
+stim_matrix = stim_matrix_raw;
+if current_density_applied
+    stim_matrix = stim_matrix ./ current_density;
 end
 meas_matrices = zeros(n_stim, max_measurements, n_elec);
+interior_sources = zeros(n_stim, max_interior);
 for i = 1:n_stim
     count = measurement_counts(i);
-    one_meas = full(double(fmdl.stimulation(i).meas_pattern));
-    meas_matrices(i, 1:count, :) = reshape(one_meas, 1, count, n_elec);
+    if count > 0
+        one_meas = full(double(fmdl.stimulation(i).meas_pattern));
+        meas_matrices(i, 1:count, :) = reshape(one_meas, 1, count, n_elec);
+    end
+    interior_count = interior_source_counts(i);
+    if interior_count > 0
+        interior_sources(i, 1:interior_count) = ...
+            full(double(fmdl.stimulation(i).interior_sources(:)'));
+    end
+end
+if ~isreal(stim_matrix) || ~isreal(meas_matrices)
+    supported = false;
+end
+positive_current = NaN(n_stim, 1);
+negative_current = NaN(n_stim, 1);
+net_current = sum(stim_matrix, 2);
+max_abs_current = max(abs(stim_matrix), [], 2);
+balanced = false(n_stim, 1);
+if isreal(stim_matrix)
+    positive_current = sum(max(stim_matrix, 0), 2);
+    negative_current = -sum(min(stim_matrix, 0), 2);
+    tolerance = 1e-12 * max(1, max_abs_current);
+    balanced = abs(net_current) <= tolerance;
 end
 end
 
-function value = local_normalize_measurements(fmdl)
-if isfield(fmdl, 'normalize_measurements')
-    value = fmdl.normalize_measurements;
+function [value, present, source] = local_normalize_measurements(fmdl)
+present = isfield(fmdl, 'normalize_measurements') || isfield(fmdl, 'normalize');
+value = double(mdl_normalize(fmdl));
+if present
+    source = 'exact_model_field';
 else
-    value = 0;
+    source = 'eidors_runtime_default_mdl_normalize';
 end
 end
 
-function value = local_background_value(img)
-if isempty(img) || ~isfield(img, 'elem_data') || isempty(img.elem_data)
-    value = 1.0;
+function [gnd, present, effective, source] = local_ground_node(fmdl)
+present = isfield(fmdl, 'gnd_node') && ~isempty(fmdl.gnd_node);
+if present
+    gnd = double(fmdl.gnd_node);
+    effective = gnd;
+    source = 'exact_model_field';
 else
-    value = double(median(img.elem_data(:)));
+    gnd = NaN;
+    solver_name = local_effective_function_name( ...
+        local_function_name(local_field_or_empty(fmdl, 'solve')), 'fwd_solve');
+    if strcmp(solver_name, 'fwd_solve_1st_order')
+        center = mean(fmdl.nodes, 1);
+        distance2 = sum(bsxfun(@minus, fmdl.nodes, center).^2, 2);
+        [~, effective] = min(distance2);
+        effective = double(effective);
+        source = 'derived_eidors_fwd_solve_1st_order_center_node';
+    else
+        effective = NaN;
+        source = 'missing_unknown_custom_solver_behavior';
+    end
 end
 end
 
-function truth = local_truth_elem_data(img, background, n_elems)
-if isempty(img) || ~isfield(img, 'elem_data') || isempty(img.elem_data)
-    truth = ones(n_elems, 1) * background;
+function result = local_resolve_image(img, fmdl, source_path, ...
+        selection_method, role)
+result.present = false;
+result.scalar_present = false;
+result.scalar_value = NaN;
+result.elem_data = zeros(size(fmdl.elems, 1), 0);
+result.source_path = source_path;
+result.selection_method = selection_method;
+result.role = role;
+result.parameterization = 'missing';
+result.mapping = 'not_run';
+result.error = '';
+result.coarse2fine_applied = false;
+result.model_background_applied = false;
+if isempty(img)
+    return;
+end
+try
+    working = img;
+    working.fwd_model = fmdl;
+    if isfield(working, 'params_mapping') && ...
+            isfield(working.params_mapping, 'function')
+        working = feval(working.params_mapping.function, working);
+        result.mapping = 'params_mapping_function';
+    end
+    if isfield(fmdl, 'coarse2fine') && isfield(working, 'elem_data')
+        c2f = fmdl.coarse2fine;
+        if size(working.elem_data, 1) == size(c2f, 2)
+            working.elem_data = c2f * working.elem_data;
+            result.coarse2fine_applied = true;
+            if isfield(fmdl, 'background')
+                working.elem_data = working.elem_data + fmdl.background;
+                result.model_background_applied = true;
+            end
+        end
+    end
+    mapped = data_mapper(working);
+    if isfield(mapped, 'current_params') && ~isempty(mapped.current_params)
+        result.parameterization = char(mapped.current_params);
+    else
+        result.parameterization = 'unspecified';
+    end
+    converted = convert_img_units(mapped, 'conductivity');
+    if ~isfield(converted, 'elem_data') || ...
+            size(converted.elem_data, 1) ~= size(fmdl.elems, 1)
+        error(['Mapped image does not provide one conductivity value per ', ...
+               'forward-model element.']);
+    end
+    result.elem_data = double(converted.elem_data);
+    result.present = true;
+    if strcmp(result.mapping, 'not_run')
+        result.mapping = 'data_mapper_then_convert_img_units_to_conductivity';
+    else
+        result.mapping = [result.mapping, ...
+            '+data_mapper+convert_img_units_to_conductivity'];
+    end
+    values = result.elem_data(:);
+    if ~isempty(values) && all(isfinite(values))
+        tolerance = 1e-12 * max(1, max(abs(values)));
+        if max(abs(values - values(1))) <= tolerance
+            result.scalar_present = true;
+            result.scalar_value = values(1);
+        end
+    end
+catch err
+    result.error = err.message;
+    result.mapping = 'unsupported_or_failed';
+end
+end
+
+function [valid, message] = local_validate_fwd_model(fmdl)
+valid = false;
+message = '';
+try
+    [valid, message] = valid_fwd_model(fmdl);
+catch err
+    message = err.message;
+end
+valid = logical(valid);
+end
+
+function value = local_field_or_empty(object, field_name)
+if isfield(object, field_name)
+    value = object.(field_name);
 else
-    truth = double(img.elem_data(:));
+    value = [];
+end
+end
+
+function name = local_function_name(value)
+if isa(value, 'function_handle')
+    name = func2str(value);
+elseif ischar(value) || isstring(value)
+    name = char(value);
+elseif isnumeric(value)
+    name = 'numeric_matrix';
+else
+    name = 'missing';
+end
+end
+
+function name = local_effective_function_name(declared, default_kind)
+name = declared;
+if strcmp(declared, 'eidors_default')
+    try
+        value = eidors_default('get', default_kind);
+        name = local_function_name(value);
+    catch
+        name = 'eidors_default_unresolved';
+    end
+end
+end
+
+function value = local_text_field(object, field_name, fallback)
+if isfield(object, field_name) && ...
+        (ischar(object.(field_name)) || isstring(object.(field_name)))
+    value = char(object.(field_name));
+else
+    value = fallback;
+end
+end
+
+function record = local_field_shape_record(object, field_name)
+record.present = isfield(object, field_name) && ~isempty(object.(field_name));
+if ~record.present
+    record.class = 'missing';
+    record.size = [];
+    return;
+end
+value = object.(field_name);
+record.class = class(value);
+record.size = size(value);
+if isa(value, 'function_handle')
+    record.function = func2str(value);
+else
+    record.function = '';
+end
+end
+
+function unit = local_contact_impedance_unit(dimension, coordinate_units)
+if strcmp(coordinate_units, 'unspecified')
+    length_unit = 'source_length_unit';
+else
+    length_unit = coordinate_units;
+end
+if dimension == 2
+    unit = ['ohm*', length_unit];
+else
+    unit = ['ohm*', length_unit, '^2'];
+end
+end
+
+function [blockers, warnings] = local_forward_readiness( ...
+        model_valid, validation_error, contact_present, projection_required, ...
+        background_image, target_image, stimulation_supported, solver_name, ...
+        gnd_present, effective_gnd_source)
+blockers = {};
+warnings = {};
+if ~model_valid
+    warnings{end + 1} = ['EIDORS valid_fwd_model rejected the source: ', ...
+        validation_error];
+end
+if any(~contact_present)
+    blockers{end + 1} = ...
+        'contact_impedance_missing_no_eidors_default';
+end
+if any(projection_required)
+    blockers{end + 1} = ...
+        'point_or_distributed_point_electrode_requires_explicit_projection_opt_in';
+end
+if ~background_image.present
+    blockers{end + 1} = 'background_image_missing_or_unmappable';
+elseif ~background_image.scalar_present
+    blockers{end + 1} = ...
+        'background_is_nonuniform_and_not_gui_scalar_compatible';
+end
+if ~target_image.present
+    warnings{end + 1} = 'No target image was selected; geometry/background only.';
+end
+if ~stimulation_supported
+    blockers{end + 1} = ...
+        'stimulation_missing_or_unsupported_voltage_interior_complex_pattern';
+end
+if ~strcmp(solver_name, 'fwd_solve_1st_order')
+    blockers{end + 1} = ...
+        'custom_eidors_forward_solver_semantics_not_portable';
+end
+if ~gnd_present && strcmp(effective_gnd_source, ...
+        'missing_unknown_custom_solver_behavior')
+    blockers{end + 1} = 'ground_node_missing_custom_solver_behavior_unknown';
+elseif ~gnd_present
+    warnings{end + 1} = ...
+        'gnd_node missing; EIDORS first-order center-node fallback was recorded.';
+end
+end
+
+function record = local_selection_record(source_path, method)
+record.source_path = source_path;
+record.method = method;
+if isempty(source_path)
+    record.status = 'missing';
+elseif strcmp(method, 'explicit_selector') || ...
+        strcmp(method, 'unique_standard_object')
+    record.status = 'exact';
+else
+    record.status = 'inferred';
+end
+end
+
+function record = local_presence_record(presence, source_path, note)
+record.source_path = source_path;
+record.present = logical(presence);
+record.note = note;
+if all(presence)
+    record.status = 'exact';
+elseif any(presence)
+    record.status = 'partial';
+else
+    record.status = 'missing';
+end
+end
+
+function record = local_runtime_record(present, runtime_source)
+record.source_present = logical(present);
+record.effective_source = runtime_source;
+if present
+    record.status = 'exact';
+elseif startsWith(runtime_source, 'missing')
+    record.status = 'missing';
+else
+    record.status = 'runtime_default';
+end
+end
+
+function record = local_image_record(image)
+record.source_path = image.source_path;
+record.selection_method = image.selection_method;
+record.role = image.role;
+record.parameterization = image.parameterization;
+record.mapping = image.mapping;
+record.coarse2fine_applied = image.coarse2fine_applied;
+record.model_background_applied = image.model_background_applied;
+record.error = image.error;
+if image.present
+    if startsWith(image.selection_method, 'inferred')
+        record.status = 'derived';
+    else
+        record.status = 'exact';
+    end
+elseif isempty(image.error)
+    record.status = 'missing';
+else
+    record.status = 'unsupported';
 end
 end
 
@@ -310,10 +991,24 @@ end
 payload = load(cfg.geometry_mat);
 nodes = double(payload.nodes);
 elems = double(payload.elems);
-boundary_edges = double(payload.boundary_edges);
+if isfield(payload, 'boundary_facets')
+    boundary_edges = double(payload.boundary_facets);
+else
+    boundary_edges = double(payload.boundary_edges);
+end
 electrode_nodes = double(payload.electrode_nodes);
 electrode_counts = double(payload.electrode_node_counts(:));
 contact_impedance = double(payload.contact_impedance);
+if isfield(payload, 'contact_impedance_present')
+    contact_present = logical(payload.contact_impedance_present(:));
+    if numel(contact_present) == 1
+        contact_present = repmat(contact_present, size(electrode_nodes, 1), 1);
+    end
+    if numel(contact_present) ~= size(electrode_nodes, 1) || any(~contact_present)
+        error(['Bridge geometry has missing contact impedance. ', ...
+               'EIDORS has no universal z_contact default.']);
+    end
+end
 background = double(payload.background);
 stim_pattern = local_or_default(cfg, 'stim_pattern', '{ad}');
 meas_pattern = local_or_default(cfg, 'meas_pattern', '{ad}');
@@ -326,18 +1021,35 @@ fmdl = eidors_obj('fwd_model', 'pyeidors_bridge_geometry');
 fmdl.nodes = nodes;
 fmdl.elems = elems;
 fmdl.boundary = boundary_edges;
-fmdl.gnd_node = 1;
+if isfield(payload, 'effective_gnd_node') && ...
+        isfinite(double(payload.effective_gnd_node))
+    fmdl.gnd_node = double(payload.effective_gnd_node);
+elseif isfield(payload, 'gnd_node') && isfinite(double(payload.gnd_node))
+    fmdl.gnd_node = double(payload.gnd_node);
+else
+    error('Bridge geometry has no explicit/effective EIDORS ground-node semantics.');
+end
 fmdl.solve = @fwd_solve_1st_order;
 fmdl.system_mat = @system_mat_1st_order;
 fmdl.jacobian = @jacobian_adjoint;
-fmdl.normalize_measurements = 0;
 if isfield(payload, 'normalize_measurements')
     fmdl.normalize_measurements = logical(payload.normalize_measurements);
+else
+    error('Bridge geometry has no normalize_measurements semantics.');
 end
 
 for i = 1:n_elec
     active_nodes = electrode_nodes(i, 1:electrode_counts(i));
     fmdl.electrode(i).nodes = active_nodes(active_nodes > 0);
+    if isfield(payload, 'electrode_face_counts') && ...
+            isfield(payload, 'electrode_faces')
+        face_count = double(payload.electrode_face_counts(i));
+        if face_count > 0
+            one_faces = double(payload.electrode_faces(i, 1:face_count, :));
+            fmdl.electrode(i).faces = reshape( ...
+                one_faces, face_count, size(boundary_edges, 2));
+        end
+    end
     if numel(contact_impedance) == 1
         fmdl.electrode(i).z_contact = contact_impedance;
     else
@@ -375,6 +1087,19 @@ if isfield(cfg, 'measurements_csv') && exist(cfg.measurements_csv, 'file') == 2
     T = readtable(cfg.measurements_csv);
     vh_meas = double(T{:, 1});
     vi_meas = double(T{:, 2});
+elseif isfield(cfg, 'measurements_mat') && exist(cfg.measurements_mat, 'file') == 2
+    measurement_payload = load(cfg.measurements_mat);
+    if ~isfield(measurement_payload, 'homogeneous') || ...
+            ~isfield(measurement_payload, 'target')
+        error('measurements.mat must contain homogeneous and target arrays.');
+    end
+    vh_meas = measurement_payload.homogeneous(:);
+    vi_meas = measurement_payload.target(:);
+else
+    vh_meas = [];
+    vi_meas = [];
+end
+if ~isempty(vh_meas) && ~isempty(vi_meas)
     vh = eidors_obj('data', 'pyeidors_bridge_homogeneous'); %#ok<NASGU>
     vh.meas = vh_meas;
     vi = eidors_obj('data', 'pyeidors_bridge_target'); %#ok<NASGU>

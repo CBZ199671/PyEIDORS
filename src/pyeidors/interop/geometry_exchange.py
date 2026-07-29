@@ -212,6 +212,70 @@ def _scalar_int(value: Any, field: str) -> int:
         raise ValueError(f"'{field}' must be an integer scalar") from exc
 
 
+def _scalar_bool(value: Any, field: str) -> bool:
+    array = np.asarray(value).reshape(-1)
+    if array.size != 1:
+        raise ValueError(f"'{field}' must be a logical scalar")
+    return bool(array[0])
+
+
+def _presence_vector(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    size: int,
+    default: bool,
+) -> np.ndarray:
+    if field not in payload:
+        return np.full(size, default, dtype=bool)
+    values = np.asarray(payload[field], dtype=bool).reshape(-1)
+    if values.size == 1:
+        return np.full(size, bool(values[0]), dtype=bool)
+    if values.size != size:
+        raise ValueError(f"'{field}' must be scalar or have {size} entries")
+    return values
+
+
+def _string_vector(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    size: int,
+) -> list[str] | None:
+    if field not in payload:
+        return None
+    raw = np.asarray(payload[field], dtype=object).reshape(-1)
+    values = [str(np.asarray(value).reshape(-1)[0]) for value in raw]
+    if len(values) != size:
+        raise ValueError(f"'{field}' must have one entry per electrode")
+    return values
+
+
+def _validate_element_data(
+    value: Any,
+    *,
+    field: str,
+    n_elements: int,
+    present: bool,
+) -> None:
+    data = np.asarray(value)
+    if not present:
+        if data.size and np.any(np.isfinite(data)):
+            raise ValueError(
+                f"'{field}' contains finite values while its presence flag is false"
+            )
+        return
+    if data.size == 1:
+        return
+    if data.ndim == 1 and data.size == n_elements:
+        return
+    if data.ndim >= 2 and data.shape[0] == n_elements:
+        return
+    raise ValueError(
+        f"'{field}' must be scalar or have n_elements rows (optionally with frames)"
+    )
+
+
 def _connectivity_array(
     payload: dict[str, Any],
     field: str,
@@ -380,16 +444,121 @@ def validate_exchange_payload(payload: dict[str, Any]) -> None:
                 "Active electrode node ids must be one-based and within nodes"
             )
 
-    truth = np.asarray(payload["truth_elem_data"]).reshape(-1)
-    if truth.size not in {1, elems.shape[0]}:
+    truth_present = (
+        _scalar_bool(payload["truth_elem_data_present"], "truth_elem_data_present")
+        if "truth_elem_data_present" in payload
+        else True
+    )
+    _validate_element_data(
+        payload["truth_elem_data"],
+        field="truth_elem_data",
+        n_elements=elems.shape[0],
+        present=truth_present,
+    )
+    background_present = (
+        _scalar_bool(payload["background_present"], "background_present")
+        if "background_present" in payload
+        else True
+    )
+    background = np.asarray(payload["background"]).reshape(-1)
+    if background.size != 1:
+        raise ValueError("'background' must be a scalar")
+    if not background_present and np.any(np.isfinite(background)):
         raise ValueError(
-            "'truth_elem_data' must be scalar or have one value per element"
+            "'background' contains a finite value while background_present is false"
+        )
+    if "background_elem_data" in payload:
+        background_elem_present = _scalar_bool(
+            payload.get("background_elem_data_present", True),
+            "background_elem_data_present",
+        )
+        _validate_element_data(
+            payload["background_elem_data"],
+            field="background_elem_data",
+            n_elements=elems.shape[0],
+            present=background_elem_present,
         )
     impedance = np.asarray(payload["contact_impedance"]).reshape(-1)
     if impedance.size not in {1, n_elec}:
         raise ValueError(
             "'contact_impedance' must be scalar or have one value per electrode"
         )
+    impedance_present = _presence_vector(
+        payload,
+        "contact_impedance_present",
+        size=n_elec,
+        default=True,
+    )
+    expanded_impedance = (
+        np.full(n_elec, impedance[0], dtype=impedance.dtype)
+        if impedance.size == 1
+        else impedance
+    )
+    if np.any(~impedance_present & np.isfinite(expanded_impedance)):
+        raise ValueError(
+            "'contact_impedance' contains finite values for electrodes whose "
+            "contact_impedance_present flag is false"
+        )
+    electrode_models = _string_vector(
+        payload,
+        "electrode_model",
+        size=n_elec,
+    )
+    if electrode_models is not None:
+        supported_models = {"cem", "cem_faces", "point", "distributed_point"}
+        unknown = sorted(set(electrode_models).difference(supported_models))
+        if unknown:
+            raise ValueError(
+                "'electrode_model' contains unsupported values: " + ", ".join(unknown)
+            )
+
+
+def source_electrode_models(payload: dict[str, Any]) -> list[str]:
+    """Return declared or boundary-derived EIDORS electrode model classes."""
+
+    n_elec = _scalar_int(payload["n_elec"], "n_elec")
+    declared = _string_vector(
+        payload,
+        "electrode_model",
+        size=n_elec,
+    )
+    if declared is not None:
+        return declared
+
+    counts = np.asarray(
+        payload["electrode_node_counts"],
+        dtype=np.int64,
+    ).reshape(-1)
+    electrode_nodes = _electrode_node_matrix(payload, counts)
+    boundary_field = (
+        "boundary_facets" if "boundary_facets" in payload else "boundary_edges"
+    )
+    dimension = _scalar_int(
+        payload.get("dimension", np.asarray(payload["nodes"]).shape[1]),
+        "dimension",
+    )
+    boundary = _connectivity_array(
+        payload,
+        boundary_field,
+        width=dimension,
+        n_nodes=np.asarray(payload["nodes"]).shape[0],
+    )
+
+    models: list[str] = []
+    for row, count in zip(electrode_nodes, counts, strict=True):
+        active = {
+            int(value)
+            for value in np.asarray(row[: int(count)], dtype=np.int64).reshape(-1)
+        }
+        if len(active) == 1:
+            models.append("point")
+            continue
+        has_complete_boundary_facet = any(
+            all(int(node_id) in active for node_id in facet)
+            for facet in np.asarray(boundary, dtype=np.int64)
+        )
+        models.append("cem" if has_complete_boundary_facet else "distributed_point")
+    return models
 
 
 def save_exchange_mat(path: Path, payload: dict[str, Any]) -> None:
@@ -470,6 +639,7 @@ def _standard_facet_tags(
     mesh,
     boundary_facets: np.ndarray,
     electrode_node_lists: list[np.ndarray],
+    electrode_models: list[str] | None = None,
 ):
     from dolfinx import mesh as dmesh
 
@@ -533,11 +703,18 @@ def _standard_facet_tags(
             "Exchange payload boundary facets do not match the generated DOLFINx mesh facets"
         )
 
-    point_electrodes = {
-        index
-        for index, node_set in enumerate(electrode_sets)
-        if len(node_set) < int(mesh.topology.dim)
-    }
+    if electrode_models is None:
+        point_electrodes = {
+            index
+            for index, node_set in enumerate(electrode_sets)
+            if len(node_set) < int(mesh.topology.dim)
+        }
+    else:
+        point_electrodes = {
+            index
+            for index, model in enumerate(electrode_models)
+            if model in {"point", "distributed_point"}
+        }
     markers: dict[int, int] = {}
     marker_counts = np.zeros(len(electrode_sets), dtype=np.int64)
     for facet_idx, source_vertices in boundary_records:
@@ -653,6 +830,7 @@ def build_mesh_from_exchange_mat(path: Path):
             f"Exchange payload declares n_elec={n_elec}, "
             f"but contains {len(standard_electrodes)} electrode node lists"
         )
+    electrode_models = source_electrode_models(payload)
 
     dolfinx_mesh = _create_dolfinx_simplex_mesh(
         nodes,
@@ -664,6 +842,7 @@ def build_mesh_from_exchange_mat(path: Path):
             dolfinx_mesh,
             boundary_facets,
             standard_electrodes,
+            electrode_models,
         )
     )
     center = np.mean(nodes, axis=0)
@@ -692,4 +871,5 @@ def build_mesh_from_exchange_mat(path: Path):
     mesh.exchange_format = _scalar_text(payload["exchange_format"])
     mesh.n_electrodes = n_elec
     mesh.electrode_projection = electrode_projection
+    mesh.source_electrode_models = electrode_models
     return mesh, payload

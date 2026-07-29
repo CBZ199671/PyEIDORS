@@ -15,6 +15,8 @@ from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 from pyeidors.data.measurement_dataset import MeasurementDataset
 from pyeidors.interop import STANDARD_INTEROP_FORMAT
+from pyeidors.interop.geometry_exchange import source_electrode_models
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
 from .bridge_package import (
     CAPTURE_SCRIPT_NAME,
@@ -140,15 +142,127 @@ def _geometry_summary(geometry_payload: dict[str, Any] | None) -> dict[str, str]
     }
 
 
-def _normalize_contact_impedance(value: Any) -> float | list[float] | None:
+def _mat_scalar_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    array = np.asarray(value).reshape(-1)
+    return default if array.size == 0 else bool(array[0])
+
+
+def _mat_json_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    array = np.asarray(value).reshape(-1)
+    if array.size == 0:
+        return {}
+    try:
+        parsed = json.loads(str(array[0]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _python_scalar(value: Any) -> float | complex:
+    scalar = complex(np.asarray(value).reshape(-1)[0])
+    if abs(scalar.imag) <= 1.0e-15:
+        return float(scalar.real)
+    return scalar
+
+
+def _normalize_contact_impedance(
+    value: Any,
+    *,
+    presence: Any = None,
+) -> float | complex | list[float | complex] | None:
     if value is None:
         return None
-    array = np.asarray(value, dtype=float)
+    array = np.asarray(value).reshape(-1)
     if array.size == 0:
         return None
+    present = (
+        np.ones(array.size, dtype=bool)
+        if presence is None
+        else np.asarray(presence, dtype=bool).reshape(-1)
+    )
+    if present.size == 1:
+        present = np.full(array.size, bool(present[0]), dtype=bool)
+    if present.size != array.size and array.size != 1:
+        return None
+    if not np.all(present):
+        return None
     if array.size == 1:
-        return float(array.reshape(-1)[0])
-    return array.reshape(-1).tolist()
+        return _python_scalar(array[0])
+    return [_python_scalar(item) for item in array]
+
+
+def _interop_semantics_from_geometry(
+    geometry: dict[str, Any],
+    *,
+    n_elec: int,
+) -> dict[str, Any]:
+    semantics = _mat_json_mapping(geometry.get("capture_metadata_json"))
+    blockers = [
+        str(item) for item in semantics.get("forward_blockers", []) if str(item)
+    ]
+    warnings = [
+        str(item) for item in semantics.get("forward_warnings", []) if str(item)
+    ]
+
+    contact_present = np.asarray(
+        geometry.get("contact_impedance_present", np.ones(n_elec, dtype=bool)),
+        dtype=bool,
+    ).reshape(-1)
+    if contact_present.size == 1:
+        contact_present = np.full(n_elec, bool(contact_present[0]), dtype=bool)
+    if contact_present.size != n_elec or not np.all(contact_present):
+        blocker = "contact_impedance_missing_no_eidors_default"
+        if blocker not in blockers:
+            blockers.append(blocker)
+
+    background_present = _mat_scalar_bool(
+        geometry.get("background_present"),
+        default=True,
+    )
+    if not background_present:
+        background_elem_present = _mat_scalar_bool(
+            geometry.get("background_elem_data_present"),
+            default="background_elem_data" in geometry,
+        )
+        background_elem_data = np.asarray(geometry.get("background_elem_data", []))
+        blocker = (
+            "background_is_nonuniform_and_not_gui_scalar_compatible"
+            if background_elem_present and background_elem_data.size
+            else "background_image_missing_or_unmappable"
+        )
+        if blocker not in blockers:
+            blockers.append(blocker)
+
+    source_models = source_electrode_models(geometry)
+    if any(model in {"point", "distributed_point"} for model in source_models):
+        blocker = (
+            "point_or_distributed_point_electrode_requires_explicit_projection_opt_in"
+        )
+        if blocker not in blockers:
+            blockers.append(blocker)
+
+    if "stimulation_supported" in geometry and not _mat_scalar_bool(
+        geometry["stimulation_supported"],
+        default=False,
+    ):
+        blocker = "stimulation_missing_or_unsupported_voltage_interior_complex_pattern"
+        if blocker not in blockers:
+            blockers.append(blocker)
+
+    return {
+        **semantics,
+        "source_framework": str(
+            np.asarray(geometry.get("source_framework", "unknown")).reshape(-1)[0]
+        ),
+        "source_electrode_models": source_models,
+        "forward_blockers": blockers,
+        "forward_warnings": warnings,
+        "forward_ready": not blockers,
+    }
 
 
 def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConfig:
@@ -185,17 +299,26 @@ def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConf
                 }
             )
     if geometry:
+        n_elec = int(np.asarray(geometry.get("n_elec", base.n_elec)).reshape(-1)[0])
+        semantics = _interop_semantics_from_geometry(
+            geometry,
+            n_elec=n_elec,
+        )
         overrides.update(
             {
-                "n_elec": int(
-                    np.asarray(geometry.get("n_elec", base.n_elec)).reshape(-1)[0]
-                ),
+                "n_elec": n_elec,
                 "n_rings": 1,
                 "contact_impedance": _normalize_contact_impedance(
-                    geometry.get("contact_impedance")
+                    geometry.get("contact_impedance"),
+                    presence=geometry.get("contact_impedance_present"),
                 ),
+                "interop_semantics": semantics,
             }
         )
+        if _mat_scalar_bool(geometry.get("background_present"), default=True):
+            background = np.asarray(geometry.get("background", [])).reshape(-1)
+            if background.size == 1 and np.isfinite(background[0]):
+                overrides["background_conductivity"] = _python_scalar(background[0])
     custom_patterns = _custom_patterns_from_geometry(geometry)
     if custom_patterns is not None:
         stim_matrix, meas_matrices = custom_patterns
@@ -214,7 +337,15 @@ def _custom_patterns_from_geometry(
 ) -> tuple[np.ndarray, list[np.ndarray]] | None:
     if "stim_matrix" not in geometry or "meas_matrices" not in geometry:
         return None
-    stim_matrix = np.asarray(geometry["stim_matrix"], dtype=float)
+    if "stimulation_supported" in geometry and not _mat_scalar_bool(
+        geometry["stimulation_supported"],
+        default=False,
+    ):
+        return None
+    stim_matrix = real_array_if_zero_imaginary(
+        geometry["stim_matrix"],
+        name="EIDORS effective stimulation matrix",
+    )
     if stim_matrix.size == 0:
         return None
     if stim_matrix.ndim == 1:
@@ -228,7 +359,10 @@ def _custom_patterns_from_geometry(
     ).reshape(-1)
     if counts.size != stim_matrix.shape[0]:
         raise ValueError("'measurement_counts' must have one entry per stimulation")
-    raw = np.asarray(geometry["meas_matrices"], dtype=float)
+    raw = real_array_if_zero_imaginary(
+        geometry["meas_matrices"],
+        name="EIDORS measurement matrices",
+    )
     if stim_matrix.shape[0] == 1 and raw.ndim == 2:
         raw = raw.reshape(1, *raw.shape)
     elif raw.ndim == 2 and raw.shape == stim_matrix.shape and np.all(counts == 1):
@@ -266,6 +400,10 @@ def _build_preview(loaded: LoadedBridgePackage) -> EidorsImportPreview:
         "mesh_dimension": forward_cfg.mesh_dimension,
         "mesh_refinement": forward_cfg.mesh_refinement,
         "contact_impedance": forward_cfg.contact_impedance,
+        "source_electrode_models": forward_cfg.interop_semantics.get(
+            "source_electrode_models", []
+        ),
+        "forward_ready": not forward_cfg.interop_semantics.get("forward_blockers", []),
         "point_count": forward_cfg.point_count(),
     }
     inferred: dict[str, Any] = {}
@@ -279,8 +417,20 @@ def _build_preview(loaded: LoadedBridgePackage) -> EidorsImportPreview:
         missing.append("geometry")
     if loaded.measurements is None:
         missing.append("measurements")
+    missing.extend(
+        str(item)
+        for item in forward_cfg.interop_semantics.get("forward_blockers", [])
+        if str(item)
+    )
 
-    warnings = list(loaded.manifest.notes)
+    warnings = [
+        *loaded.manifest.notes,
+        *[
+            str(item)
+            for item in forward_cfg.interop_semantics.get("forward_warnings", [])
+            if str(item)
+        ],
+    ]
     if loaded.measurements:
         try:
             measurements = loaded.measurements
@@ -446,6 +596,54 @@ def build_geometry_payload_from_result(
         if background is None
         else background
     )
+    configured_impedance = forward_model_config.contact_impedance
+    if configured_impedance is None:
+        effective_impedance: float | complex | np.ndarray = 0.01
+        impedance_status = "pyeidors_runtime_default"
+    elif isinstance(configured_impedance, (int, float, complex)):
+        effective_impedance = configured_impedance
+        impedance_status = "exact_config"
+    else:
+        effective_impedance = np.asarray(configured_impedance)
+        impedance_status = "exact_config"
+    contact_unit = (
+        "ohm*mesh_coordinate_unit" if dimension == 2 else "ohm*mesh_coordinate_unit^2"
+    )
+    export_semantics = {
+        "schema": "eidors_pyeidors_capture_semantics_v1",
+        "source_framework": "pyeidors",
+        "fields": {
+            "contact_impedance": {
+                "status": impedance_status,
+                "effective_value_exported": True,
+            },
+            "background_image": {
+                "status": "exact_config",
+            },
+            "target_image": {
+                "status": "exact_result"
+                if truth_elem_data is not None
+                else "derived_from_background",
+            },
+            "gnd_node": {
+                "status": "derived",
+                "effective_source": "pyeidors_export_gauge_choice",
+            },
+            "normalize_measurements": {
+                "status": "exact",
+                "effective_source": "pyeidors_forward_unnormalized",
+            },
+        },
+        "electrode_models": [
+            "cem"
+            for _ in range(
+                forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
+            )
+        ],
+        "forward_ready": True,
+        "forward_blockers": [],
+        "forward_warnings": [],
+    }
     payload: dict[str, Any] = {
         "exchange_format": STANDARD_INTEROP_FORMAT,
         "schema_version": 2,
@@ -464,15 +662,29 @@ def build_geometry_payload_from_result(
             forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
         ),
         "background": background_value,
+        "background_present": True,
+        "background_elem_data": np.full(elems.shape[0], background_value),
+        "background_elem_data_present": True,
         "truth_elem_data": truth_elem,
-        "contact_impedance": (
-            forward_model_config.contact_impedance
-            if isinstance(
-                forward_model_config.contact_impedance,
-                (int, float, complex),
-            )
-            else np.asarray(forward_model_config.contact_impedance or [0.01])
+        "truth_elem_data_present": True,
+        "target_elem_data": truth_elem,
+        "contact_impedance": effective_impedance,
+        "contact_impedance_present": True,
+        "contact_impedance_unit": contact_unit,
+        "electrode_model": export_semantics["electrode_models"],
+        "electrode_projection_required": np.zeros(
+            len(export_semantics["electrode_models"]),
+            dtype=bool,
         ),
+        "model_coordinate_units": "mesh_coordinate_unit",
+        "geometry_scale_to_m": float(forward_model_config.geometry_scale_to_m),
+        "gnd_node": np.nan,
+        "gnd_node_present": False,
+        "effective_gnd_node": 1,
+        "effective_gnd_node_source": "pyeidors_export_gauge_choice",
+        "normalize_measurements": False,
+        "normalize_measurements_present": True,
+        "normalize_measurements_source": "pyeidors_forward_unnormalized",
         "mesh_name": mesh_name,
         "mesh_level": "bridge_export",
         "scenario_name": scenario_name,
@@ -481,19 +693,26 @@ def build_geometry_payload_from_result(
         forward_model_config.custom_stim_matrix is not None
         and forward_model_config.custom_meas_matrices is not None
     ):
-        stim_matrix = np.asarray(
+        stim_matrix = real_array_if_zero_imaginary(
             forward_model_config.custom_stim_matrix,
-            dtype=float,
+            name="PyEIDORS custom stimulation matrix",
         )
         if stim_matrix.ndim == 1:
             stim_matrix = stim_matrix.reshape(1, -1)
         raw_measurements = forward_model_config.custom_meas_matrices
         if isinstance(raw_measurements, (list, tuple)):
             measurement_list = [
-                np.asarray(matrix, dtype=float) for matrix in raw_measurements
+                real_array_if_zero_imaginary(
+                    matrix,
+                    name="PyEIDORS custom measurement matrix",
+                )
+                for matrix in raw_measurements
             ]
         else:
-            measurement_array = np.asarray(raw_measurements, dtype=float)
+            measurement_array = real_array_if_zero_imaginary(
+                raw_measurements,
+                name="PyEIDORS custom measurement matrices",
+            )
             if measurement_array.ndim == 2:
                 measurement_list = [
                     measurement_array.copy() for _ in range(stim_matrix.shape[0])
@@ -528,11 +747,41 @@ def build_geometry_payload_from_result(
             counts[index] = matrix.shape[0]
         payload.update(
             {
+                "stim_matrix_raw": stim_matrix,
                 "stim_matrix": stim_matrix,
                 "meas_matrices": padded,
                 "measurement_counts": counts,
+                "current_density": np.nan,
+                "current_density_present": False,
+                "current_density_applied": False,
+                "stimulation_supported": True,
+                "stim_positive_current": np.sum(np.maximum(stim_matrix, 0.0), axis=1),
+                "stim_negative_current": -np.sum(np.minimum(stim_matrix, 0.0), axis=1),
+                "stim_net_current": np.sum(stim_matrix, axis=1),
+                "stim_max_abs_current": np.max(np.abs(stim_matrix), axis=1),
+                "stim_balanced": np.abs(np.sum(stim_matrix, axis=1))
+                <= (
+                    1.0e-12
+                    * np.maximum(
+                        1.0,
+                        np.max(np.abs(stim_matrix), axis=1),
+                    )
+                ),
             }
         )
+        export_semantics["fields"]["stimulation"] = {
+            "status": "exact_config",
+            "raw_equals_effective": True,
+        }
+    else:
+        export_semantics["fields"]["stimulation"] = {
+            "status": "generated_at_eidors_import",
+            "drive_value": float(forward_model_config.drive_value),
+        }
+    payload["capture_metadata_json"] = json.dumps(
+        export_semantics,
+        ensure_ascii=False,
+    )
     return payload
 
 
@@ -544,6 +793,8 @@ class EidorsBridgeRunner:
         environment: EidorsEnvironment,
         script_path: str | Path,
         output_dir: str | Path,
+        *,
+        selectors: dict[str, str] | None = None,
     ) -> Path:
         if not environment.matlab_command:
             raise RuntimeError(t("interop.svc.err.no_matlab"))
@@ -566,6 +817,13 @@ class EidorsBridgeRunner:
             "output_dir": matlab_runtime_path(root, environment),
             "script_kind": hints["script_kind"],
         }
+        request_payload.update(
+            {
+                str(key): str(value)
+                for key, value in dict(selectors or {}).items()
+                if str(value).strip()
+            }
+        )
         request_path = root / CAPTURE_REQUEST_NAME
         request_path.write_text(
             json.dumps(request_payload, ensure_ascii=False, indent=2),
@@ -615,6 +873,9 @@ class EidorsBridgeRunner:
                 "can_import_geometry": geometry_payload is not None,
                 "can_import_measurements": measurements is not None,
                 "can_capture_script": True,
+                "can_run_equivalent_forward": not bool(
+                    forward_cfg.interop_semantics.get("forward_blockers", [])
+                ),
             },
             script_path=str(source),
             script_kind=str(hints.get("script_kind", "unknown")),
@@ -764,6 +1025,7 @@ class InteropBundleExporter:
             else "",
             "geometry_mat": to_windows_path((root / GEOMETRY_NAME).resolve()),
             "measurements_csv": to_windows_path((root / "measurements.csv").resolve()),
+            "measurements_mat": to_windows_path((root / "measurements.mat").resolve()),
             "stim_pattern": forward_model_config.stim_pattern,
             "meas_pattern": forward_model_config.meas_pattern,
             "rotate_meas": forward_model_config.rotate_meas,
@@ -798,6 +1060,7 @@ class InteropSmokeValidator:
         reconstruction_preset: ReconstructionPreset | None = None,
     ) -> dict[str, Any]:
         config = _config_from_loaded_package(loaded)
+        config.require_interop_forward_ready()
         measurements = loaded.measurements or {}
         homogeneous = measurements.get("homogeneous")
         target = measurements.get("target")

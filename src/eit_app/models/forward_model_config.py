@@ -226,6 +226,8 @@ class ForwardModelConfig:
     custom_pattern_json: str = ""
     custom_stim_matrix: Any | None = None
     custom_meas_matrices: Any | None = None
+    interop_semantics: dict[str, Any] = field(default_factory=dict)
+    allow_interop_approximations: bool = False
 
     radius: float = 1.0
     height: float = 1.0
@@ -355,6 +357,13 @@ class ForwardModelConfig:
             custom_pattern_json=str(raw.get("custom_pattern_json", "")),
             custom_stim_matrix=custom_stim_matrix,
             custom_meas_matrices=custom_meas_matrices,
+            interop_semantics=_parse_custom_pattern_payload(
+                raw.get("interop_semantics")
+            ),
+            allow_interop_approximations=_parse_bool(
+                raw.get("allow_interop_approximations", False),
+                False,
+            ),
             radius=float(raw.get("radius", 1.0)),
             height=float(raw.get("height", 1.0)),
             electrode_height_ratio=float(raw.get("electrode_height_ratio", 0.2)),
@@ -416,6 +425,8 @@ class ForwardModelConfig:
             "custom_pattern_json": self.custom_pattern_json,
             "custom_stim_matrix": self.custom_stim_matrix,
             "custom_meas_matrices": self.custom_meas_matrices,
+            "interop_semantics": dict(self.interop_semantics),
+            "allow_interop_approximations": bool(self.allow_interop_approximations),
             "radius": float(self.radius),
             "height": float(self.height),
             "electrode_height_ratio": float(self.electrode_height_ratio),
@@ -470,3 +481,30 @@ class ForwardModelConfig:
         payload = self.to_mapping()
         payload.update(overrides)
         return ForwardModelConfig.from_mapping(payload)
+
+    def require_interop_forward_ready(self) -> None:
+        """Reject imported-model forward runs with unresolved source semantics."""
+
+        if self.mesh_source != "interop":
+            return
+        blockers = [
+            str(item)
+            for item in self.interop_semantics.get("forward_blockers", [])
+            if str(item)
+        ]
+        if self.allow_interop_approximations:
+            blockers = [
+                item
+                for item in blockers
+                if item
+                != (
+                    "point_or_distributed_point_electrode_requires_"
+                    "explicit_projection_opt_in"
+                )
+            ]
+        if blockers:
+            raise ValueError(
+                "Imported EIDORS model is not ready for an equivalent PyEIDORS "
+                "forward solve. Resolve or explicitly accept these blockers: "
+                + ", ".join(blockers)
+            )

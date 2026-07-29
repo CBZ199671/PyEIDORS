@@ -54,6 +54,7 @@ def _forward_smoke(mesh: Any, config: Any) -> dict[str, Any]:
     from pyeidors import EITSystem
     from pyeidors.data import PatternConfig
 
+    config.require_interop_forward_ready()
     pattern = PatternConfig(
         n_elec=config.n_elec,
         n_rings=config.n_rings,
@@ -114,6 +115,7 @@ def _cmd_import_geometry(args: argparse.Namespace) -> int:
         "n_boundary_facets": int(mesh.facet_tags.indices.size),
         "n_electrodes": int(mesh.n_electrodes),
         "electrode_projection": str(getattr(mesh, "electrode_projection", "unknown")),
+        "source_electrode_models": list(getattr(mesh, "source_electrode_models", [])),
     }
     if args.forward_smoke:
         if config is None:
@@ -125,6 +127,8 @@ def _cmd_import_geometry(args: argparse.Namespace) -> int:
                 .preview_loaded_package(loaded)
                 .forward_model_config
             )
+        if args.allow_point_electrode_projection:
+            config = config.with_overrides(allow_interop_approximations=True)
         report.update(_forward_smoke(mesh, config))
     _emit(report)
     return 0
@@ -146,6 +150,17 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         environment,
         Path(args.script),
         Path(args.output),
+        selectors={
+            key: value
+            for key, value in {
+                "fwd_model_var": args.fwd_model_var,
+                "background_image_var": args.background_image_var,
+                "target_image_var": args.target_image_var,
+                "homogeneous_data_var": args.homogeneous_data_var,
+                "target_data_var": args.target_data_var,
+            }.items()
+            if value
+        },
     )
     report = validate_bridge_package(root)
     report["capture_output"] = str(root.resolve())
@@ -181,11 +196,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also run one homogeneous forward solve on the imported mesh.",
     )
+    import_parser.add_argument(
+        "--allow-point-electrode-projection",
+        action="store_true",
+        help=(
+            "Explicitly accept the non-equivalent point/distributed-point to "
+            "incident-boundary-facet approximation for --forward-smoke."
+        ),
+    )
     import_parser.set_defaults(handler=_cmd_import_geometry)
 
     capture_parser = subparsers.add_parser(
         "capture",
-        help="Run an arbitrary EIDORS script and create Bridge Package v2.",
+        help=(
+            "Run an EIDORS script and capture its discoverable standard "
+            "objects into Bridge Package v2."
+        ),
     )
     capture_parser.add_argument("script", help="EIDORS .m script to run")
     capture_parser.add_argument("--output", required=True, help="Output directory")
@@ -203,6 +229,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile-name",
         default="CLI MATLAB / EIDORS",
         help="Human-readable environment name",
+    )
+    capture_parser.add_argument(
+        "--fwd-model-var",
+        default="",
+        help="Explicit discovered MATLAB path for the forward model.",
+    )
+    capture_parser.add_argument(
+        "--background-image-var",
+        default="",
+        help="Explicit discovered MATLAB path for the background image.",
+    )
+    capture_parser.add_argument(
+        "--target-image-var",
+        default="",
+        help="Explicit discovered MATLAB path for the target/truth image.",
+    )
+    capture_parser.add_argument(
+        "--homogeneous-data-var",
+        default="",
+        help="Explicit discovered MATLAB path for homogeneous measurements.",
+    )
+    capture_parser.add_argument(
+        "--target-data-var",
+        default="",
+        help="Explicit discovered MATLAB path for target measurements.",
     )
     capture_parser.set_defaults(handler=_cmd_capture)
     return parser
