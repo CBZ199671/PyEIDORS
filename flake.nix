@@ -1391,6 +1391,8 @@ PY
               py.numpy
               py.scipy
               py.matplotlib
+              py.ipykernel
+              py.jupyterlab
               py.pandas
               py.h5py
               py.pyyaml

@@ -1,0 +1,538 @@
+{
+  "status": "ready_to_share",
+  "metrics_sha256": "16ce692bfebdef17e866a00e279375a11ebdffac2ab9faf993a114b3c198d1ce",
+  "timing_sha256": "799003b1ed5663364a833e7341115678c026ba73f96dee0aabb22df9ce776dfe",
+  "accuracy": {
+    "record_count": 228,
+    "case_count": 38,
+    "solvers": [
+      "EIDORS",
+      "NGSolve",
+      "PyEIDORS/DOLFINx"
+    ],
+    "formulations": [
+      "classic",
+      "robin_transconductance"
+    ],
+    "geometric_means": {
+      "classic": {
+        "EIDORS": 1.6935476890754599e-15,
+        "NGSolve": 1.1200923250127873e-14,
+        "PyEIDORS/DOLFINx": 1.1094109141135253e-15
+      },
+      "robin_transconductance": {
+        "EIDORS": 1.7352953602888227e-15,
+        "NGSolve": 1.0751276317956813e-14,
+        "PyEIDORS/DOLFINx": 1.0595913702941103e-15
+      }
+    },
+    "win_counts": {
+      "classic": {
+        "EIDORS": 11,
+        "NGSolve": 0,
+        "PyEIDORS/DOLFINx": 27
+      },
+      "robin_transconductance": {
+        "EIDORS": 9,
+        "NGSolve": 0,
+        "PyEIDORS/DOLFINx": 29
+      }
+    },
+    "q4_summary": {
+      "classic": {
+        "case_ids": [
+          "X33",
+          "X34",
+          "X35",
+          "X36",
+          "X37",
+          "X38"
+        ],
+        "same_order_all_cases": true,
+        "ordering": [
+          "PyEIDORS/DOLFINx",
+          "EIDORS",
+          "NGSolve"
+        ]
+      },
+      "robin_transconductance": {
+        "case_ids": [
+          "X33",
+          "X34",
+          "X35",
+          "X36",
+          "X37",
+          "X38"
+        ],
+        "same_order_all_cases": true,
+        "ordering": [
+          "PyEIDORS/DOLFINx",
+          "EIDORS",
+          "NGSolve"
+        ]
+      }
+    },
+    "rankings": {
+      "X01:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X02:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X03:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X04:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X05:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X06:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X07:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X08:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X09:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X10:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X11:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X12:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X13:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X14:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X15:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X16:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X17:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X18:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X19:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X20:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X21:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X22:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X23:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X24:classic": [
+        "PyEIDORS/DOLFINx",
+        "NGSolve",
+        "EIDORS"
+      ],
+      "X25:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X26:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X27:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X28:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X29:classic": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X30:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X31:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X32:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X33:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X34:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X35:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X36:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X37:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X38:classic": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X01:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X02:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X03:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X04:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X05:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X06:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X07:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X08:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X09:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X10:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X11:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X12:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X13:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X14:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X15:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X16:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X17:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X18:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X19:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X20:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X21:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X22:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X23:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X24:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "NGSolve",
+        "EIDORS"
+      ],
+      "X25:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X26:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X27:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X28:robin_transconductance": [
+        "EIDORS",
+        "PyEIDORS/DOLFINx",
+        "NGSolve"
+      ],
+      "X29:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X30:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X31:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X32:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X33:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X34:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X35:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X36:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X37:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ],
+      "X38:robin_transconductance": [
+        "PyEIDORS/DOLFINx",
+        "EIDORS",
+        "NGSolve"
+      ]
+    }
+  },
+  "timing": {
+    "EIDORS": {
+      "cold": {
+        "geometric_mean_robin_over_classic": 1.119555315706159,
+        "robin_faster_case_count": 6,
+        "case_count": 38
+      },
+      "setup": {
+        "geometric_mean_robin_over_classic": 1.509053791301527,
+        "robin_faster_case_count": 0,
+        "case_count": 38
+      },
+      "warm_reuse": {
+        "geometric_mean_robin_over_classic": 0.19831231265450325,
+        "robin_faster_case_count": 36,
+        "case_count": 38
+      }
+    },
+    "NGSolve": {
+      "cold": {
+        "geometric_mean_robin_over_classic": 0.5112932453063055,
+        "robin_faster_case_count": 31,
+        "case_count": 38
+      },
+      "setup": {
+        "geometric_mean_robin_over_classic": 0.3083429176101231,
+        "robin_faster_case_count": 38,
+        "case_count": 38
+      },
+      "warm_reuse": {
+        "geometric_mean_robin_over_classic": 0.5406289773241373,
+        "robin_faster_case_count": 31,
+        "case_count": 38
+      }
+    },
+    "PyEIDORS/DOLFINx": {
+      "cold": {
+        "geometric_mean_robin_over_classic": 0.3617551129230941,
+        "robin_faster_case_count": 38,
+        "case_count": 38
+      },
+      "setup": {
+        "geometric_mean_robin_over_classic": 0.33523249676357025,
+        "robin_faster_case_count": 38,
+        "case_count": 38
+      },
+      "warm_reuse": {
+        "geometric_mean_robin_over_classic": 0.5142091001125662,
+        "robin_faster_case_count": 33,
+        "case_count": 38
+      }
+    }
+  },
+  "exact_reference": {
+    "case_id": "X01",
+    "truth_sha256": "c9e62f9a3516b2ed31f20aa2d0bd471d41d4d81a7c7e371b412a03ba596ff2f7",
+    "certification": {
+      "exact_classic_residual_zero": true,
+      "exact_robin_residual_zero": true,
+      "exact_classic_robin_identical": true,
+      "exact_voltage_gauge_zero": true
+    }
+  },
+  "notebooks": {
+    "pyeidors_walkthrough.ipynb": {
+      "code_cell_count": 13,
+      "executed_code_cell_count": 13,
+      "error_cell_count": 0
+    },
+    "ngsolve_walkthrough.ipynb": {
+      "code_cell_count": 12,
+      "executed_code_cell_count": 12,
+      "error_cell_count": 0
+    },
+    "exact_rational_truth_walkthrough.ipynb": {
+      "code_cell_count": 12,
+      "executed_code_cell_count": 12,
+      "error_cell_count": 0
+    }
+  }
+}
