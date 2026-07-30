@@ -43,7 +43,15 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.precision_float64": "Float64 (High Precision)",
     "main.status.precision_changed": "Compute precision switched to {mode}; effective next acquisition / solve.",
     "menu.tools": "&Tools",
-    "menu.tools.interop_hub": "EIDORS &Interop Hub\u2026",
+    "menu.tools.interop_hub": "&Load EIDORS model\u2026",
+    "menu.tools.model_assets": "Bridge v3 model &assets\u2026",
+    "main.interop.bind_selected_sessions": (
+        "Also validate and bind the {count} currently selected database "
+        "session(s) to this model?"
+    ),
+    "main.interop.bound_selected_sessions": (
+        "Validated and bound {count} selected database session(s)."
+    ),
     "menu.tools.cache_telemetry": "&Cache Telemetry\u2026",
     "main.status.recon_running": "Running {method}\u2026",
     "main.status.recon_failed": "Reconstruction failed: {error}",
@@ -1036,6 +1044,17 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.import_target.hardware": "Hardware config template",
     "dlg.interop.import_target.simulation": "Simulation config",
     "dlg.interop.import_target.dataset": "Dataset config",
+    "dlg.interop.import_target.all": "Apply to simulation, dataset, and realtime",
+    "dlg.interop.msg.script_side_effect_warning": (
+        "PyEIDORS will start a fresh MATLAB process and run this script in a "
+        "temporary working directory. The script can still perform its own "
+        "external file, network, device, or process side effects. Continue?"
+    ),
+    "dlg.interop.selector.model": "Model variable/path",
+    "dlg.interop.selector.background": "Background image variable/path",
+    "dlg.interop.selector.target": "Target image variable/path",
+    "dlg.interop.selector.reference_data": "Reference data variable/path",
+    "dlg.interop.selector.target_data": "Target data variable/path",
     "dlg.interop.import_target.measurements": "Boundary voltages only",
     "dlg.interop.import_target.geometry": "Geometry assets only",
     "dlg.interop.auto_smoke_check": "Auto-run inverse-problem smoke test after import",

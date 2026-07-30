@@ -28,7 +28,7 @@ for source_path in (ROOT, SRC):
         sys.path.insert(0, str(source_path))
 
 from pyeidors.interop.geometry_exchange import (
-    LEGACY_INTEROP_FORMAT,
+    STANDARD_INTEROP_FORMAT,
     build_mesh_from_exchange_mat,
     save_exchange_mat,
 )
@@ -358,10 +358,16 @@ def generate_true_circle_mesh(
     json_path = output_path / "cem_continuum_common_p1.json"
     write_gmsh22(msh_path, nodes, cells, tagged_edges, geometry.n_electrodes)
     payload = {
-        "exchange_format": LEGACY_INTEROP_FORMAT,
+        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "schema_version": 3,
+        "index_base": 1,
+        "dimension": 2,
+        "cell_type": "triangle",
+        "boundary_entity_type": "edge",
         "source_framework": "true_circle_gmsh_cad",
         "nodes": nodes,
         "elems": cells + 1,
+        "boundary_facets": tagged_edges[:, :2] + 1,
         "boundary_edges": tagged_edges[:, :2] + 1,
         "tagged_boundary_edges": np.column_stack(
             (tagged_edges[:, :2] + 1, tagged_edges[:, 2])
@@ -668,10 +674,16 @@ def _write_case_fixture(
     )
     write_gmsh22(msh_path, nodes, cells, tagged_edges, GEOMETRY.n_electrodes)
     payload = {
-        "exchange_format": LEGACY_INTEROP_FORMAT,
+        "exchange_format": STANDARD_INTEROP_FORMAT,
+        "schema_version": 3,
+        "index_base": 1,
+        "dimension": 2,
+        "cell_type": "triangle",
+        "boundary_entity_type": "edge",
         "source_framework": "true_circle_gmsh_cad",
         "nodes": nodes,
         "elems": cells + 1,
+        "boundary_facets": tagged_edges[:, :2] + 1,
         "boundary_edges": tagged_edges[:, :2] + 1,
         "tagged_boundary_edges": np.column_stack(
             (tagged_edges[:, :2] + 1, tagged_edges[:, 2])

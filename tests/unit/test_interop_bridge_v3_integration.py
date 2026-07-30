@@ -1,4 +1,4 @@
-"""Bridge Package v2 novice CLI and exact-mesh integration tests."""
+"""Bridge Package v3 novice CLI and exact-model integration tests."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from eit_app.controllers.forward_solver_controller import (
     _setup_generated_forward_system,
 )
 from eit_app.interop import (
+    EidorsBridgeRunner,
+    EidorsEnvironment,
     InteropBundleImporter,
     build_geometry_payload_from_result,
     save_bridge_package,
@@ -26,6 +28,7 @@ from eit_app.interop.matlab_templates import (
     RUN_IN_EIDORS_TEMPLATE,
 )
 from eit_app.models.forward_model_config import ForwardModelConfig
+from pyeidors.interop import BridgeV3Package, ElectrodeSpec
 
 
 def _custom_protocol() -> tuple[np.ndarray, list[np.ndarray]]:
@@ -80,14 +83,14 @@ def _tetra_geometry_payload() -> tuple[dict[str, object], ForwardModelConfig]:
         electrode_nodes=facets,
         electrode_node_counts=np.full(4, 3, dtype=np.int64),
         mesh_name="unit_tetrahedron",
-        scenario_name="bridge_v2_unit",
+        scenario_name="bridge_v3_unit",
     )
     return payload, config
 
 
-def _make_v2_package(tmp_path: Path) -> Path:
+def _make_v3_package(tmp_path: Path) -> Path:
     payload, config = _tetra_geometry_payload()
-    root = tmp_path / "bridge_v2_3d"
+    root = tmp_path / "bridge_v3_3d"
     save_bridge_package(
         root,
         default_manifest(source_framework="pyeidors", package_kind="unit_test"),
@@ -98,10 +101,10 @@ def _make_v2_package(tmp_path: Path) -> Path:
     return root
 
 
-def test_v734_v735_bridge_v2_validates_and_loads_exact_3d_config(
+def test_v753_v754_bridge_v3_validates_and_loads_exact_3d_config(
     tmp_path: Path,
 ) -> None:
-    root = _make_v2_package(tmp_path)
+    root = _make_v3_package(tmp_path)
 
     report = validate_bridge_package(root)
     loaded = InteropBundleImporter().load_package(root)
@@ -109,8 +112,8 @@ def test_v734_v735_bridge_v2_validates_and_loads_exact_3d_config(
     config = preview.forward_model_config
 
     assert report["valid"] is True
-    assert report["package_format"] == "eidors_pyeidors_bridge_v2"
-    assert report["geometry_format"] == "eidors_pyeidors_geometry_v2"
+    assert report["package_format"] == "eidors_pyeidors_bridge_v3"
+    assert report["geometry_format"] == "eidors_pyeidors_geometry_v3"
     assert report["dimension"] == 3
     assert report["cell_type"] == "tetrahedron"
     assert report["n_nodes"] == 4
@@ -130,21 +133,66 @@ def test_v734_v735_bridge_v2_validates_and_loads_exact_3d_config(
     assert [matrix.shape for matrix in config.custom_meas_matrices] == [(1, 4)] * 4
 
 
+def test_v755_protocol_and_fields_files_are_the_only_runtime_authority(
+    tmp_path: Path,
+) -> None:
+    geometry, config = _tetra_geometry_payload()
+    protocol_stim = np.asarray(geometry["stim_matrix"]) * 0.125
+    package = BridgeV3Package.write(
+        tmp_path / "separate_authority",
+        model={
+            "schema_version": 3,
+            "n_elec": 4,
+            "dimension": 3,
+            "potential_order": 1,
+            "forward_model_config": config.to_mapping(),
+        },
+        geometry=geometry,
+        protocol={
+            "stim_matrix": protocol_stim,
+            "meas_matrices": geometry["meas_matrices"],
+            "measurement_counts": geometry["measurement_counts"],
+            "stimulation_supported": True,
+        },
+        fields={
+            "background": 2.5,
+            "background_present": True,
+            "background_elem_data": np.asarray([2.5]),
+            "target_elem_data": np.asarray([3.0]),
+        },
+    )
+
+    loaded = InteropBundleImporter().load_package(package.root)
+    imported = (
+        InteropBundleImporter().preview_loaded_package(loaded).forward_model_config
+    )
+
+    np.testing.assert_allclose(imported.custom_stim_matrix, protocol_stim)
+    assert imported.background_conductivity == pytest.approx(2.5)
+    np.testing.assert_allclose(
+        loaded.protocol_payload["stim_matrix"],
+        protocol_stim,
+    )
+    assert loaded.fields_payload["background"] == pytest.approx(2.5)
+
+
 def test_v734_bridge_validator_rejects_unsafe_manifest_path(tmp_path: Path) -> None:
-    root = _make_v2_package(tmp_path)
+    root = _make_v3_package(tmp_path)
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["files"]["geometry"] = "../geometry.mat"
+    manifest["files"]["geometry"]["path"] = "../geometry.mat"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     report = validate_bridge_package(root)
 
     assert report["valid"] is False
-    assert any("safe relative path" in message for message in report["errors"])
+    assert any(
+        "Unsafe Bridge v3 relative path" in message for message in report["errors"]
+    )
 
 
 def test_v734_cli_validate_inspect_and_import_geometry(tmp_path: Path) -> None:
-    root = _make_v2_package(tmp_path)
+    root = _make_v3_package(tmp_path)
     repo_root = Path(__file__).resolve().parents[2]
 
     for command in ("validate", "inspect", "import-geometry"):
@@ -172,36 +220,119 @@ def test_v734_cli_validate_inspect_and_import_geometry(tmp_path: Path) -> None:
 
 
 def test_v736_forward_setup_uses_imported_mesh_not_generator(tmp_path: Path) -> None:
-    root = _make_v2_package(tmp_path)
+    root = _make_v3_package(tmp_path)
     config = InteropBundleImporter().preview_package(root)[1].forward_model_config
     calls: list[dict[str, object]] = []
     fake_system = SimpleNamespace(
         setup=lambda **kwargs: calls.append(kwargs),
     )
 
-    _setup_generated_forward_system(
-        fake_system,
-        forward_cfg=config,
-        runtime={},
-    )
+    with pytest.raises(ValueError, match="Unmanaged interop geometry"):
+        _setup_generated_forward_system(
+            fake_system,
+            forward_cfg=config,
+            runtime={},
+        )
 
-    assert len(calls) == 1
-    assert "mesh" in calls[0]
-    assert calls[0]["mesh"].topology.dim == 3
-    assert calls[0]["mesh"].num_cells() == 1
-    assert calls[0]["initialize_inverse"] is False
-    assert "mesh_source" not in calls[0]
+    assert calls == []
 
 
-def test_v736_matlab_templates_preserve_geometry_v2_and_exact_protocol() -> None:
-    assert "eidors_pyeidors_geometry_v2" in CAPTURE_SCRIPT_TEMPLATE
+def test_v754_matlab_templates_preserve_geometry_v3_and_exact_protocol() -> None:
+    assert "eidors_pyeidors_geometry_v3" in CAPTURE_SCRIPT_TEMPLATE
     assert "boundary_facets" in CAPTURE_SCRIPT_TEMPLATE
     assert "local_build_pattern_arrays" in CAPTURE_SCRIPT_TEMPLATE
     assert "'stim_matrix'" in CAPTURE_SCRIPT_TEMPLATE
     assert "'meas_matrices'" in CAPTURE_SCRIPT_TEMPLATE
-    assert "payload.stim_matrix" in RUN_IN_EIDORS_TEMPLATE
+    assert "protocol.stim_matrix" in RUN_IN_EIDORS_TEMPLATE
     assert "fmdl.stimulation(i).stim_pattern" in RUN_IN_EIDORS_TEMPLATE
     assert "fmdl.stimulation(i).meas_pattern" in RUN_IN_EIDORS_TEMPLATE
+    assert "local_expand_logical_electrodes" in RUN_IN_EIDORS_TEMPLATE
+    assert "logical_to_physical * stim_matrix(i, :)'" in RUN_IN_EIDORS_TEMPLATE
+    assert "logical_meas * logical_to_physical'" in RUN_IN_EIDORS_TEMPLATE
+    assert "local_assert_logical_n2e" in RUN_IN_EIDORS_TEMPLATE
+    assert "local_assert_logical_v2meas" in RUN_IN_EIDORS_TEMPLATE
+
+
+def test_v762_real_eidors_gate_compares_common_parameter_jacobian() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    acceptance_source = (
+        repo_root / "scripts/interop/run_eidors_source_semantics_acceptance.py"
+    ).read_text(encoding="utf-8")
+    matlab_source = (
+        repo_root / "examples/interop/export_bridge_jacobian_v3.m"
+    ).read_text(encoding="utf-8")
+    roundtrip_source = (
+        repo_root / "examples/interop/validate_bridge_in_eidors.m"
+    ).read_text(encoding="utf-8")
+
+    assert "pem_native_eidors_jacobian_parity" in acceptance_source
+    assert 'pem_parity["jacobian_relative_l2"] <= 5e-3' in acceptance_source
+    assert "source_cell_data_to_local" in acceptance_source
+    assert "EidorsJacobianAdapter" in acceptance_source
+    assert "calc_jacobian(img_background)" in matlab_source
+    assert "size(jacobian, 2) ~= size(fmdl.elems, 1)" in matlab_source
+    assert "all(~logical(payload.contact_impedance_applicable(:)))" in roundtrip_source
+
+
+def test_v755_public_matlab_v3_entry_points_are_shipped() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    exporter = (repo_root / "matlab" / "pyeidors_export_v3.m").read_text(
+        encoding="utf-8"
+    )
+    importer = (repo_root / "matlab" / "pyeidors_import_v3.m").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function package_dir = pyeidors_export_v3(" in exporter
+    assert "'Background'" in exporter
+    assert "'Target'" in exporter
+    assert "pyeidors-interop" in exporter
+    assert "'--fwd-model-var'" in exporter
+    assert "function imported = pyeidors_import_v3(" in importer
+    assert "'eidors_pyeidors_bridge_v3'" in importer
+    assert "'validate'" in importer
+    assert "imported.fwd_model = fmdl" in importer
+
+
+def test_v755_fresh_capture_staging_is_packaged_before_strict_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import eit_app.interop.services as services_module
+    from scipy.io import savemat
+
+    payload, _ = _tetra_geometry_payload()
+    output = tmp_path / "fresh_capture"
+
+    def fake_matlab_capture(command: list[str], *, timeout: int | None = None):
+        del command, timeout
+        output.mkdir(parents=True, exist_ok=True)
+        savemat(output / "geometry.mat", payload)
+        return 0, "", ""
+
+    monkeypatch.setattr(
+        services_module,
+        "_run_command_capture",
+        fake_matlab_capture,
+    )
+    source = tmp_path / "source.m"
+    source.write_text("fmdl = mk_common_model('a3cr', 4);\n", encoding="utf-8")
+
+    root = EidorsBridgeRunner().run_capture(
+        EidorsEnvironment(
+            name="unit",
+            matlab_command="/opt/matlab/bin/matlab",
+            eidors_startup="/opt/eidors/startup.m",
+        ),
+        source,
+        output,
+    )
+
+    report = validate_bridge_package(root)
+    assert report["valid"] is True
+    assert (root / "manifest.json").is_file()
+    assert (root / "protocol.mat").is_file()
+    assert (root / "fields.mat").is_file()
 
 
 def _make_source_semantics_package(
@@ -227,6 +358,10 @@ def _make_source_semantics_package(
         payload["electrode_nodes"] = np.arange(1, 5, dtype=np.int64).reshape(-1, 1)
         payload["electrode_node_counts"] = np.ones(4, dtype=np.int64)
         payload["electrode_model"] = ["point"] * 4
+        payload["pem_node_weights"] = np.ones((4, 1))
+        payload["cem_face_nodes"] = np.empty((0, 3), dtype=np.int64)
+        payload["cem_face_node_counts"] = np.empty(0, dtype=np.int64)
+        payload["cem_face_electrode"] = np.empty(0, dtype=np.int64)
         payload["electrode_projection_required"] = np.ones(4, dtype=bool)
         metadata = json.loads(str(payload["capture_metadata_json"]))
         metadata["electrode_models"] = ["point"] * 4
@@ -294,7 +429,6 @@ def test_v743_missing_contact_impedance_is_preserved_and_blocks_forward(
     config = preview.forward_model_config
 
     assert report["valid"] is True
-    assert report["contact_impedance_present"] == [False] * 4
     assert report["forward_ready"] is False
     assert "contact_impedance_missing_no_eidors_default" in report["forward_blockers"]
     assert config.contact_impedance is None
@@ -314,13 +448,13 @@ def test_v748_point_electrodes_route_to_native_pem_without_projection_opt_in(
     assert report["valid"] is True
     assert report["electrode_models"] == ["point"] * 4
     assert report["electrode_model"] == "pem"
-    assert report["electrode_projection"] == "none"
+    assert report["electrode_projection"] == "exact_weighted_n2e"
     assert report["forward_ready"] is True
     assert config.electrode_model == "pem"
     assert config.drive_mode == "total_current"
     assert config.potential_order == 1
     assert config.interop_semantics["contact_impedance_applicable"] is False
-    assert config.interop_semantics["electrode_projection"] == "none"
+    assert config.interop_semantics["electrode_projection"] == "exact_weighted_n2e"
     config.require_interop_forward_ready()
 
 
@@ -385,13 +519,82 @@ def test_v749_pem_export_uses_singleton_nodes_and_labeled_eidors_placeholder() -
     assert payload["electrode_model"] == ["point"] * 4
     np.testing.assert_array_equal(payload["electrode_node_counts"], [1, 1, 1, 1])
     np.testing.assert_array_equal(payload["electrode_nodes"], [[1], [2], [3], [4]])
-    assert float(payload["contact_impedance"]) == 1.0
-    assert bool(payload["contact_impedance_applicable"]) is False
-    assert bool(payload["contact_impedance_physical_present"]) is False
+    assert np.isnan(np.asarray(payload["contact_impedance"])).all()
+    assert not np.asarray(payload["contact_impedance_present"], dtype=bool).any()
+    assert not np.asarray(payload["contact_impedance_applicable"], dtype=bool).any()
+    assert not np.asarray(
+        payload["contact_impedance_physical_present"],
+        dtype=bool,
+    ).any()
     assert int(payload["effective_gnd_node"]) == 2
+    assert metadata["fields"]["contact_impedance"]["status"] == "exact_config"
+
+
+def test_v763_weighted_pem_and_cem_export_restores_singleton_protocol_axes(
+    tmp_path: Path,
+) -> None:
+    nodes = np.asarray([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    cells = np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64)
+    config = ForwardModelConfig(
+        mesh_dimension=2,
+        n_elec=2,
+        electrode_model="mixed",
+        measurement_protocol="custom",
+        custom_stim_matrix=np.asarray([[1.0, -1.0]]),
+        custom_meas_matrices=[np.asarray([[1.0, -1.0]])],
+        contact_impedance=None,
+    )
+    specs = (
+        ElectrodeSpec(
+            kind="cem",
+            index_base=0,
+            source_nodes=(0, 1),
+            source_faces=((0, 1),),
+            boundary_kind="exterior",
+            contact_impedance=0.02,
+            contact_impedance_present=True,
+            contact_impedance_applicable=True,
+        ),
+        ElectrodeSpec(
+            kind="pem",
+            index_base=0,
+            source_nodes=(2, 3),
+            node_weights=(0.25, 0.75),
+            boundary_kind="none",
+            contact_impedance=None,
+            contact_impedance_present=False,
+            contact_impedance_applicable=False,
+        ),
+    )
+
+    payload = build_geometry_payload_from_result(
+        node_coords=nodes,
+        cell_connectivity=cells,
+        forward_model_config=config,
+        electrode_specs=specs,
+    )
+    root = tmp_path / "mixed_exact"
+    save_bridge_package(
+        root,
+        default_manifest(source_framework="pyeidors", package_kind="unit_test"),
+        geometry_payload=payload,
+        forward_model_config=config,
+    )
+
+    report = validate_bridge_package(root)
+    imported = InteropBundleImporter().preview_package(root)[1].forward_model_config
+
+    assert report["valid"] is True
+    assert report["electrode_model"] == "mixed"
+    assert report["electrode_projection"] == "exact_per_electrode"
+    assert report["forward_ready"] is True
+    assert report["contact_impedance_present"] == [True, False]
+    assert imported.electrode_model == "mixed"
+    np.testing.assert_allclose(payload["pem_node_weights"][1, :2], [0.25, 0.75])
+    np.testing.assert_array_equal(payload["cem_face_nodes"], [[1, 2]])
     assert (
-        metadata["fields"]["contact_impedance"]["status"]
-        == "eidors_structural_placeholder_not_used_by_pem"
+        "mixed_cem_pem_electrode_models_not_supported"
+        not in (imported.interop_semantics["forward_blockers"])
     )
 
 
@@ -420,12 +623,12 @@ def test_v745_nonuniform_background_is_preserved_without_scalar_inference(
 
     assert report["valid"] is True
     assert report["background_present"] is False
+    assert "background_image_missing_or_unmappable" not in report["forward_blockers"]
     assert (
-        "background_is_nonuniform_and_not_gui_scalar_compatible"
-        in report["forward_blockers"]
+        "background_uses_exact_element_field_without_scalar_summary"
+        in config.interop_semantics["forward_warnings"]
     )
-    with pytest.raises(ValueError, match="background_is_nonuniform"):
-        config.require_interop_forward_ready()
+    config.require_interop_forward_ready()
 
 
 def test_v744_pyeidors_export_records_current_and_eidors_runtime_semantics() -> None:
@@ -466,6 +669,6 @@ def test_v744_complex_measurements_use_mat_without_silent_real_cast(
 
     assert not (root / "measurements.csv").exists()
     assert (root / "measurements.mat").exists()
-    assert manifest["files"]["measurements_mat"] == "measurements.mat"
+    assert manifest["files"]["measurements"]["path"] == "measurements.mat"
     np.testing.assert_allclose(loaded.measurements["homogeneous"], homogeneous)
     np.testing.assert_allclose(loaded.measurements["target"], target)

@@ -34,7 +34,12 @@ end
 
 orig_dir = pwd;
 cleanup = onCleanup(@() cd(orig_dir));
-cd(script_dir);
+if isfield(cfg, 'work_dir') && exist(char(cfg.work_dir), 'dir') == 7
+    addpath(script_dir);
+    cd(char(cfg.work_dir));
+else
+    cd(script_dir);
+end
 run(target_script);
 
 catalog = local_discover_workspace();
@@ -61,8 +66,8 @@ if exist(out_dir, 'dir') ~= 7
     mkdir(out_dir);
 end
 
-exchange_format = 'eidors_pyeidors_geometry_v2';
-schema_version = 2;
+exchange_format = 'eidors_pyeidors_geometry_v3';
+schema_version = 3;
 index_base = 1;
 source_framework = 'eidors';
 nodes = double(fmdl.nodes);
@@ -82,11 +87,38 @@ if isfield(fmdl, 'boundary')
 else
     boundary_facets = double(find_boundary(fmdl.elems));
 end
-boundary_edges = boundary_facets; % v1/MATLAB compatibility alias
+boundary_edges = boundary_facets; % MATLAB compatibility alias
+runtime = fwd_model_parameters(fmdl, 'skip_VOLUME');
+N2E = full(runtime.N2E);
+QQ = local_runtime_matrix(runtime, 'QQ', size(nodes, 1), 0);
+VV = local_runtime_matrix(runtime, 'VV', size(nodes, 1), 0);
+v2meas = local_runtime_matrix(runtime, 'v2meas', 0, size(nodes, 1));
+runtime_boundary = double(runtime.boundary);
+runtime_normalize = logical(runtime.normalize);
+CEM_boundary = zeros(0, dimension);
+if isfield(fmdl, 'system_mat_fields') && ...
+        isfield(fmdl.system_mat_fields, 'CEM_boundary')
+    CEM_boundary = double(fmdl.system_mat_fields.CEM_boundary);
+end
+coarse2fine = zeros(size(elems, 1), 0);
+coarse2fine_present = isfield(fmdl, 'coarse2fine') && ...
+    ~isempty(fmdl.coarse2fine);
+if coarse2fine_present
+    coarse2fine = full(fmdl.coarse2fine);
+end
+meas_select = zeros(0, 1);
+meas_select_present = isfield(fmdl, 'meas_select') && ...
+    ~isempty(fmdl.meas_select);
+if meas_select_present
+    meas_select = full(fmdl.meas_select);
+end
 [electrode_nodes, electrode_node_counts, electrode_faces, ...
  electrode_face_counts, electrode_model, contact_impedance, ...
- contact_impedance_present, electrode_projection_required] = ...
-    local_build_electrode_arrays(fmdl, boundary_facets, dimension);
+ contact_impedance_present, electrode_projection_required, ...
+ pem_node_weights, electrode_boundary_kind, cem_face_nodes, ...
+ cem_face_node_counts, cem_face_electrode] = ...
+    local_build_electrode_arrays( ...
+        fmdl, boundary_facets, runtime_boundary, N2E, dimension);
 [stim_matrix_raw, stim_matrix, meas_matrices, measurement_counts, ...
  volt_matrix, volt_pattern_present, interior_sources, ...
  interior_source_counts, stimulation_labels, current_density, ...
@@ -97,6 +129,9 @@ boundary_edges = boundary_facets; % v1/MATLAB compatibility alias
 n_elec = double(numel(fmdl.electrode));
 [normalize_measurements, normalize_measurements_present, ...
  normalize_measurements_source] = local_normalize_measurements(fmdl);
+if normalize_measurements ~= runtime_normalize
+    error('EIDORS runtime normalize disagrees with mdl_normalize.');
+end
 [gnd_node, gnd_node_present, effective_gnd_node, ...
  effective_gnd_node_source] = local_ground_node(fmdl);
 background_image = local_resolve_image(img_bg, fmdl, img_bg_source, ...
@@ -132,7 +167,7 @@ contact_impedance_unit = local_contact_impedance_unit(dimension, ...
     effective_gnd_node_source);
 
 capture_metadata = struct();
-capture_metadata.schema = 'eidors_pyeidors_capture_semantics_v1';
+capture_metadata.schema = 'eidors_pyeidors_capture_semantics_v3';
 capture_metadata.eidors_version = eidors_obj('eidors_version');
 capture_metadata.selected.fwd_model = local_selection_record( ...
     fmdl_source, fmdl_selection);
@@ -170,6 +205,13 @@ capture_metadata.fields.gnd_node = local_runtime_record( ...
 capture_metadata.fields.stimulation = local_presence_record( ...
     ~isempty(stim_matrix_raw), 'fwd_model.stimulation', ...
     'Raw and EIDORS-effective patterns are stored separately.');
+capture_metadata.runtime_operators.N2E = size(N2E);
+capture_metadata.runtime_operators.QQ = size(QQ);
+capture_metadata.runtime_operators.VV = size(VV);
+capture_metadata.runtime_operators.v2meas = size(v2meas);
+capture_metadata.runtime_operators.CEM_boundary = size(CEM_boundary);
+capture_metadata.runtime_operators.meas_select_present = meas_select_present;
+capture_metadata.runtime_operators.coarse2fine_present = coarse2fine_present;
 capture_metadata.fields.background_image = local_image_record(background_image);
 capture_metadata.fields.target_image = local_image_record(target_image);
 capture_metadata.electrode_models = electrode_model;
@@ -198,11 +240,24 @@ save(fullfile(out_dir, 'geometry.mat'), ...
     'electrode_faces', ...
     'electrode_face_counts', ...
     'electrode_model', ...
+    'electrode_boundary_kind', ...
+    'pem_node_weights', ...
+    'cem_face_nodes', ...
+    'cem_face_node_counts', ...
+    'cem_face_electrode', ...
     'electrode_projection_required', ...
+    'CEM_boundary', ...
+    'runtime_boundary', ...
     'stim_matrix_raw', ...
     'stim_matrix', ...
     'meas_matrices', ...
     'measurement_counts', ...
+    'N2E', ...
+    'QQ', ...
+    'VV', ...
+    'v2meas', ...
+    'meas_select', ...
+    'meas_select_present', ...
     'volt_matrix', ...
     'volt_pattern_present', ...
     'interior_sources', ...
@@ -232,6 +287,8 @@ save(fullfile(out_dir, 'geometry.mat'), ...
     'truth_elem_data', ...
     'truth_elem_data_present', ...
     'target_elem_data', ...
+    'coarse2fine', ...
+    'coarse2fine_present', ...
     'contact_impedance', ...
     'contact_impedance_present', ...
     'contact_impedance_unit', ...
@@ -479,15 +536,21 @@ end
 
 function [electrode_nodes, electrode_node_counts, electrode_faces, ...
           electrode_face_counts, electrode_model, contact_impedance, ...
-          contact_impedance_present, projection_required] = ...
-          local_build_electrode_arrays(fmdl, boundary_facets, dimension)
+          contact_impedance_present, projection_required, ...
+          pem_node_weights, electrode_boundary_kind, cem_face_nodes, ...
+          cem_face_node_counts, cem_face_electrode] = ...
+          local_build_electrode_arrays( ...
+              fmdl, boundary_facets, runtime_boundary, N2E, dimension)
 n_elec = numel(fmdl.electrode);
+n_node = size(fmdl.nodes, 1);
 electrode_node_counts = zeros(n_elec, 1);
 max_nodes = 0;
 max_faces = 0;
 node_lists = cell(n_elec, 1);
+weight_lists = cell(n_elec, 1);
 face_lists = cell(n_elec, 1);
 electrode_model = cell(n_elec, 1);
+electrode_boundary_kind = cell(n_elec, 1);
 contact_impedance = NaN(n_elec, 1);
 contact_impedance_present = false(n_elec, 1);
 projection_required = false(n_elec, 1);
@@ -495,33 +558,50 @@ for i = 1:n_elec
     elec = fmdl.electrode(i);
     if ~isfield(elec, 'nodes') || ischar(elec.nodes)
         error(['Electrode %d does not expose numeric mesh nodes. ', ...
-               'Instrument electrodes are not supported by Geometry v2.'], i);
+               'Instrument electrodes are audit-only in Bridge v3.'], i);
+    end
+    runtime_row = full(double(N2E(i, :)));
+    runtime_columns = find(runtime_row ~= 0);
+    if isempty(runtime_columns)
+        error('Electrode %d has no active N2E entries.', i);
     end
     nodes = double(elec.nodes(:)');
+    weights = zeros(1, 0);
     faces = zeros(0, dimension);
-    if isfield(elec, 'faces') && ~isempty(elec.faces)
-        faces = double(elec.faces);
-        if size(faces, 2) ~= dimension
-            error('Electrode %d faces must have width %d.', i, dimension);
-        end
-        nodes = unique([nodes(:); faces(:)])';
-        electrode_model{i} = 'cem_faces';
-    elseif numel(nodes) == 1
-        electrode_model{i} = 'point';
-        projection_required(i) = false;
-    elseif numel(nodes) > 1
-        complete = all(ismember(boundary_facets, nodes), 2);
-        faces = boundary_facets(complete, :);
-        if isempty(faces)
-            electrode_model{i} = 'distributed_point';
-            projection_required(i) = true;
+    if any(runtime_columns > n_node)
+        if isfield(elec, 'faces') && ~isempty(elec.faces)
+            faces = double(elec.faces);
+            electrode_model{i} = 'cem_faces';
         else
+            complete = all(ismember(runtime_boundary, nodes), 2);
+            faces = runtime_boundary(complete, :);
             electrode_model{i} = 'cem';
         end
+        if isempty(faces) || size(faces, 2) ~= dimension
+            error('CEM electrode %d has no exact width-%d faces.', i, dimension);
+        end
+        nodes = unique([nodes(:); faces(:)])';
+        if local_all_faces_in_set(faces, boundary_facets)
+            electrode_boundary_kind{i} = 'exterior';
+        else
+            electrode_boundary_kind{i} = 'interior';
+        end
     else
-        error('Electrode %d has zero mesh nodes.', i);
+        nodes = runtime_columns;
+        weights = runtime_row(runtime_columns);
+        if numel(nodes) == 1
+            electrode_model{i} = 'point';
+        else
+            electrode_model{i} = 'distributed_point';
+        end
+        electrode_boundary_kind{i} = 'none';
+        tolerance = 1e-12 * max(1, max(abs(weights)));
+        if abs(sum(weights) - 1) > tolerance
+            error('PEM electrode %d N2E weights do not sum to one.', i);
+        end
     end
     node_lists{i} = nodes;
+    weight_lists{i} = weights;
     face_lists{i} = faces;
     electrode_node_counts(i) = numel(nodes);
     electrode_face_counts(i, 1) = size(faces, 1); %#ok<AGROW>
@@ -534,13 +614,47 @@ for i = 1:n_elec
     end
 end
 electrode_nodes = zeros(n_elec, max_nodes);
+pem_node_weights = zeros(n_elec, max_nodes);
 electrode_faces = zeros(n_elec, max_faces, dimension);
+total_cem_faces = sum(electrode_face_counts);
+cem_face_nodes = zeros(total_cem_faces, dimension);
+cem_face_node_counts = dimension * ones(total_cem_faces, 1);
+cem_face_electrode = zeros(total_cem_faces, 1);
+face_cursor = 0;
 for i = 1:n_elec
     nodes = node_lists{i};
     electrode_nodes(i, 1:numel(nodes)) = nodes;
+    weights = weight_lists{i};
+    if ~isempty(weights)
+        pem_node_weights(i, 1:numel(weights)) = weights;
+    end
     faces = face_lists{i};
     electrode_faces(i, 1:size(faces, 1), :) = ...
         reshape(faces, 1, size(faces, 1), dimension);
+    if ~isempty(faces)
+        rows = face_cursor + (1:size(faces, 1));
+        cem_face_nodes(rows, :) = faces;
+        cem_face_electrode(rows) = i;
+        face_cursor = face_cursor + size(faces, 1);
+    end
+end
+end
+
+function result = local_all_faces_in_set(faces, reference)
+if isempty(faces)
+    result = false;
+    return;
+end
+sorted_reference = sort(reference, 2);
+sorted_faces = sort(faces, 2);
+result = all(ismember(sorted_faces, sorted_reference, 'rows'));
+end
+
+function value = local_runtime_matrix(runtime, field_name, n_rows, n_cols)
+if isfield(runtime, field_name) && ~isempty(runtime.(field_name))
+    value = full(runtime.(field_name));
+else
+    value = zeros(n_rows, n_cols);
 end
 end
 
@@ -850,21 +964,18 @@ if ~model_valid
     warnings{end + 1} = ['EIDORS valid_fwd_model rejected the source: ', ...
         validation_error];
 end
-all_point = ~isempty(electrode_model) && ...
-    all(strcmp(electrode_model, 'point'));
-if any(~contact_present) && ~all_point
+cem_mask = strcmp(electrode_model, 'cem') | ...
+    strcmp(electrode_model, 'cem_faces');
+if any(~contact_present & cem_mask)
     blockers{end + 1} = ...
         'contact_impedance_missing_no_eidors_default';
 end
 if any(projection_required)
     blockers{end + 1} = ...
-        'distributed_point_electrode_requires_explicit_projection_opt_in';
+        'unexpected_electrode_projection_requested';
 end
 if ~background_image.present
     blockers{end + 1} = 'background_image_missing_or_unmappable';
-elseif ~background_image.scalar_present
-    blockers{end + 1} = ...
-        'background_is_nonuniform_and_not_gui_scalar_compatible';
 end
 if ~target_image.present
     warnings{end + 1} = 'No target image was selected; geometry/background only.';
@@ -991,6 +1102,14 @@ if exist('eidors_default', 'file') ~= 2
 end
 
 payload = load(cfg.geometry_mat);
+if ~isfield(cfg, 'protocol_mat') || exist(cfg.protocol_mat, 'file') ~= 2
+    error('Bridge v3 protocol.mat was not found.');
+end
+protocol = load(cfg.protocol_mat);
+if ~isfield(cfg, 'fields_mat') || exist(cfg.fields_mat, 'file') ~= 2
+    error('Bridge v3 fields.mat was not found.');
+end
+fields_payload = load(cfg.fields_mat);
 nodes = double(payload.nodes);
 elems = double(payload.elems);
 if isfield(payload, 'boundary_facets')
@@ -1001,12 +1120,19 @@ end
 electrode_nodes = double(payload.electrode_nodes);
 electrode_counts = double(payload.electrode_node_counts(:));
 contact_impedance = double(payload.contact_impedance);
+electrode_models = repmat({'cem'}, size(electrode_nodes, 1), 1);
+if isfield(payload, 'electrode_model')
+    electrode_models = local_text_vector(payload.electrode_model);
+end
 if isfield(payload, 'contact_impedance_present')
     contact_present = logical(payload.contact_impedance_present(:));
     if numel(contact_present) == 1
         contact_present = repmat(contact_present, size(electrode_nodes, 1), 1);
     end
-    if numel(contact_present) ~= size(electrode_nodes, 1) || any(~contact_present)
+    cem_mask = strcmp(strtrim(electrode_models), 'cem') | ...
+        strcmp(strtrim(electrode_models), 'cem_faces');
+    if numel(contact_present) ~= size(electrode_nodes, 1) || ...
+            any(~contact_present & cem_mask)
         error(['Bridge geometry has missing contact impedance. ', ...
                'EIDORS has no universal z_contact default.']);
     end
@@ -1018,7 +1144,11 @@ rotate_meas = logical(local_or_default(cfg, 'rotate_meas', true));
 use_meas_current = logical(local_or_default(cfg, 'use_meas_current', false));
 drive_value = double(local_or_default(cfg, 'drive_value', 1.0));
 
-n_elec = double(size(electrode_nodes, 1));
+n_logical_elec = double(size(electrode_nodes, 1));
+[logical_to_physical, physical_nodes, physical_logical, ...
+ logical_primary_physical] = local_expand_logical_electrodes( ...
+    payload, electrode_nodes, electrode_counts, electrode_models);
+n_elec = double(size(logical_to_physical, 1));
 fmdl = eidors_obj('fwd_model', 'pyeidors_bridge_geometry');
 fmdl.nodes = nodes;
 fmdl.elems = elems;
@@ -1034,40 +1164,85 @@ end
 fmdl.solve = @fwd_solve_1st_order;
 fmdl.system_mat = @system_mat_1st_order;
 fmdl.jacobian = @jacobian_adjoint;
-if isfield(payload, 'normalize_measurements')
-    fmdl.normalize_measurements = logical(payload.normalize_measurements);
+if isfield(protocol, 'normalize_measurements')
+    fmdl.normalize_measurements = logical(protocol.normalize_measurements);
 else
-    error('Bridge geometry has no normalize_measurements semantics.');
+    error('Bridge v3 protocol has no normalize_measurements semantics.');
 end
 
-for i = 1:n_elec
-    active_nodes = electrode_nodes(i, 1:electrode_counts(i));
-    fmdl.electrode(i).nodes = active_nodes(active_nodes > 0);
-    if isfield(payload, 'electrode_face_counts') && ...
+for physical_idx = 1:n_elec
+    logical_idx = physical_logical(physical_idx);
+    fmdl.electrode(physical_idx).nodes = physical_nodes{physical_idx};
+    model_kind = strtrim(electrode_models{logical_idx});
+    is_pem = strcmp(model_kind, 'point') || ...
+        strcmp(model_kind, 'distributed_point') || strcmp(model_kind, 'pem');
+    if is_pem
+        fmdl.electrode(physical_idx).z_contact = 1;
+        fmdl.electrode(physical_idx).pyeidors_z_contact_nonphysical = true;
+        fmdl.electrode(physical_idx).pyeidors_logical_electrode = logical_idx;
+        fmdl.electrode(physical_idx).pyeidors_logical_weight = ...
+            logical_to_physical(physical_idx, logical_idx);
+    elseif numel(contact_impedance) == 1
+        fmdl.electrode(physical_idx).z_contact = contact_impedance;
+    else
+        fmdl.electrode(physical_idx).z_contact = contact_impedance(logical_idx);
+    end
+    if ~is_pem && isfield(payload, 'electrode_face_counts') && ...
             isfield(payload, 'electrode_faces')
-        face_count = double(payload.electrode_face_counts(i));
+        face_count = double(payload.electrode_face_counts(logical_idx));
         if face_count > 0
-            one_faces = double(payload.electrode_faces(i, 1:face_count, :));
-            fmdl.electrode(i).faces = reshape( ...
+            one_faces = double(payload.electrode_faces( ...
+                logical_idx, 1:face_count, :));
+            fmdl.electrode(physical_idx).faces = reshape( ...
                 one_faces, face_count, size(boundary_edges, 2));
+            fmdl.electrode(physical_idx).nodes = [];
         end
     end
-    if numel(contact_impedance) == 1
-        fmdl.electrode(i).z_contact = contact_impedance;
-    else
-        fmdl.electrode(i).z_contact = contact_impedance(i);
+end
+fmdl.pyeidors_bridge.logical_electrode_count = n_logical_elec;
+fmdl.pyeidors_bridge.logical_to_physical = logical_to_physical;
+fmdl.pyeidors_bridge.physical_to_logical = physical_logical;
+fmdl.pyeidors_bridge.logical_primary_physical = logical_primary_physical;
+
+if isfield(payload, 'electrode_boundary_kind') && ...
+        isfield(payload, 'cem_face_nodes') && ...
+        isfield(payload, 'cem_face_electrode')
+    boundary_kind = local_text_vector(payload.electrode_boundary_kind);
+    face_electrode = double(payload.cem_face_electrode(:));
+    all_faces = double(payload.cem_face_nodes);
+    interior_faces = zeros(0, size(boundary_edges, 2));
+    for logical_idx = 1:n_logical_elec
+        rows = face_electrode == logical_idx;
+        if any(rows)
+            physical_idx = logical_primary_physical(logical_idx);
+            fmdl.electrode(physical_idx).faces = all_faces(rows, :);
+            fmdl.electrode(physical_idx).nodes = [];
+            if strcmp(strtrim(boundary_kind{logical_idx}), 'interior')
+                interior_faces = [interior_faces; all_faces(rows, :)]; %#ok<AGROW>
+            end
+        end
+    end
+    if ~isempty(interior_faces)
+        fmdl.system_mat_fields.CEM_boundary = interior_faces;
     end
 end
 
-if isfield(payload, 'stim_matrix') && ~isempty(payload.stim_matrix) && ...
-        isfield(payload, 'meas_matrices') && isfield(payload, 'measurement_counts')
-    stim_matrix = double(payload.stim_matrix);
-    measurement_counts = double(payload.measurement_counts(:));
+if isfield(protocol, 'stim_matrix') && ~isempty(protocol.stim_matrix) && ...
+        isfield(protocol, 'meas_matrices') && ...
+        isfield(protocol, 'measurement_counts')
+    stim_matrix = double(protocol.stim_matrix);
+    measurement_counts = double(protocol.measurement_counts(:));
+    if size(stim_matrix, 2) ~= n_logical_elec
+        error('Bridge v3 stimulation width does not match logical electrodes.');
+    end
     for i = 1:size(stim_matrix, 1)
-        fmdl.stimulation(i).stim_pattern = sparse(stim_matrix(i, :)');
+        physical_stim = logical_to_physical * stim_matrix(i, :)';
+        fmdl.stimulation(i).stim_pattern = sparse(physical_stim);
         count = measurement_counts(i);
-        one_meas = double(payload.meas_matrices(i, 1:count, :));
-        fmdl.stimulation(i).meas_pattern = sparse(reshape(one_meas, count, n_elec));
+        one_meas = double(protocol.meas_matrices(i, 1:count, :));
+        logical_meas = reshape(one_meas, count, n_logical_elec);
+        fmdl.stimulation(i).meas_pattern = sparse( ...
+            logical_meas * logical_to_physical');
     end
 else
     stim_options = {};
@@ -1081,9 +1256,44 @@ else
     else
         stim_options{end+1} = 'no_meas_current';
     end
-    fmdl.stimulation = mk_stim_patterns(n_elec, 1, stim_pattern, meas_pattern, ...
-        stim_options, drive_value);
+    logical_stimulation = mk_stim_patterns(n_logical_elec, 1, ...
+        stim_pattern, meas_pattern, stim_options, drive_value);
+    for i = 1:numel(logical_stimulation)
+        fmdl.stimulation(i) = logical_stimulation(i);
+        fmdl.stimulation(i).stim_pattern = sparse( ...
+            logical_to_physical * logical_stimulation(i).stim_pattern);
+        fmdl.stimulation(i).meas_pattern = sparse( ...
+            logical_stimulation(i).meas_pattern * logical_to_physical');
+    end
 end
+if isfield(protocol, 'meas_select') && ~isempty(protocol.meas_select)
+    fmdl.meas_select = protocol.meas_select;
+end
+if isfield(fields_payload, 'coarse2fine') && ...
+        ~isempty(fields_payload.coarse2fine)
+    fmdl.coarse2fine = fields_payload.coarse2fine;
+end
+if isfield(fields_payload, 'background_elem_data') && ...
+        ~isempty(fields_payload.background_elem_data)
+    img_background = eidors_obj('image', 'pyeidors_bridge_background'); %#ok<NASGU>
+    img_background.fwd_model = fmdl;
+    img_background.elem_data = fields_payload.background_elem_data(:);
+end
+if isfield(fields_payload, 'target_elem_data') && ...
+        ~isempty(fields_payload.target_elem_data)
+    img_target = eidors_obj('image', 'pyeidors_bridge_target'); %#ok<NASGU>
+    img_target.fwd_model = fmdl;
+    img_target.elem_data = fields_payload.target_elem_data(:);
+end
+
+runtime_roundtrip = fwd_model_parameters(fmdl, 'skip_VOLUME');
+local_assert_logical_n2e( ...
+    protocol, runtime_roundtrip.N2E, logical_to_physical);
+local_assert_runtime_operator(protocol, 'QQ', runtime_roundtrip.QQ);
+local_assert_runtime_operator(protocol, 'VV', runtime_roundtrip.VV);
+local_assert_logical_v2meas( ...
+    protocol, runtime_roundtrip.v2meas, logical_to_physical, ...
+    numel(fmdl.stimulation));
 
 if isfield(cfg, 'measurements_csv') && exist(cfg.measurements_csv, 'file') == 2
     T = readtable(cfg.measurements_csv);
@@ -1111,11 +1321,110 @@ end
 
 fprintf('EIDORS bridge project loaded from %s\n', cfg.geometry_mat);
 
+function [logical_to_physical, physical_nodes, physical_logical, ...
+          logical_primary] = local_expand_logical_electrodes( ...
+          payload, electrode_nodes, electrode_counts, electrode_models)
+n_logical = size(electrode_nodes, 1);
+pem_weights = zeros(size(electrode_nodes));
+if isfield(payload, 'pem_node_weights')
+    pem_weights = double(payload.pem_node_weights);
+end
+physical_nodes = {};
+physical_logical = zeros(0, 1);
+physical_weights = zeros(0, 1);
+logical_primary = zeros(n_logical, 1);
+for logical_idx = 1:n_logical
+    count = electrode_counts(logical_idx);
+    active_nodes = electrode_nodes(logical_idx, 1:count);
+    model_kind = strtrim(electrode_models{logical_idx});
+    is_pem = strcmp(model_kind, 'point') || ...
+        strcmp(model_kind, 'distributed_point') || strcmp(model_kind, 'pem');
+    if is_pem
+        weights = pem_weights(logical_idx, 1:count);
+        if count == 1 && all(weights == 0)
+            weights = 1;
+        end
+        if ~isreal(weights) || any(~isfinite(weights)) || any(weights < 0) || ...
+                abs(sum(weights) - 1) > 1e-12 * max(1, max(abs(weights)))
+            error('Bridge v3 PEM electrode %d has invalid exact weights.', ...
+                logical_idx);
+        end
+        for node_idx = 1:count
+            physical_idx = numel(physical_nodes) + 1;
+            physical_nodes{physical_idx, 1} = active_nodes(node_idx); %#ok<AGROW>
+            physical_logical(physical_idx, 1) = logical_idx; %#ok<AGROW>
+            physical_weights(physical_idx, 1) = weights(node_idx); %#ok<AGROW>
+            if logical_primary(logical_idx) == 0
+                logical_primary(logical_idx) = physical_idx;
+            end
+        end
+    else
+        physical_idx = numel(physical_nodes) + 1;
+        physical_nodes{physical_idx, 1} = active_nodes(active_nodes > 0); %#ok<AGROW>
+        physical_logical(physical_idx, 1) = logical_idx; %#ok<AGROW>
+        physical_weights(physical_idx, 1) = 1; %#ok<AGROW>
+        logical_primary(logical_idx) = physical_idx;
+    end
+end
+logical_to_physical = sparse( ...
+    (1:numel(physical_nodes))', physical_logical, physical_weights, ...
+    numel(physical_nodes), n_logical);
+end
+
+function local_assert_runtime_operator(protocol, field_name, actual)
+if ~isfield(protocol, field_name)
+    return;
+end
+expected = full(protocol.(field_name));
+actual = full(actual);
+if ~isequal(size(expected), size(actual)) || ...
+        norm(double(expected(:) - actual(:))) > ...
+        1e-12 * max(1, norm(double(expected(:))))
+    error('Bridge v3 runtime operator %s did not round-trip.', field_name);
+end
+end
+
+function local_assert_logical_n2e(protocol, actual, logical_to_physical)
+if ~isfield(protocol, 'N2E')
+    return;
+end
+logical_actual = logical_to_physical' * full(actual);
+local_assert_runtime_operator(protocol, 'N2E', logical_actual);
+end
+
+function local_assert_logical_v2meas( ...
+        protocol, actual, logical_to_physical, n_stim)
+if ~isfield(protocol, 'v2meas')
+    return;
+end
+lift = kron(speye(n_stim), logical_to_physical);
+logical_expected = full(protocol.v2meas);
+physical_expected = lift * logical_expected;
+if ~isequal(size(physical_expected), size(actual)) || ...
+        norm(double(physical_expected(:) - actual(:))) > ...
+        1e-12 * max(1, norm(double(physical_expected(:))))
+    error('Bridge v3 logical v2meas did not round-trip after PEM expansion.');
+end
+end
+
 function value = local_or_default(cfg, field_name, default_value)
 if isfield(cfg, field_name)
     value = cfg.(field_name);
 else
     value = default_value;
+end
+end
+
+function values = local_text_vector(raw)
+if iscell(raw)
+    values = cellfun(@(value) strtrim(char(value)), raw(:), ...
+        'UniformOutput', false);
+elseif isstring(raw)
+    values = cellstr(raw(:));
+elseif ischar(raw)
+    values = cellstr(raw);
+else
+    error('Bridge v3 text-vector field has an unsupported MATLAB type.');
 end
 end
 """

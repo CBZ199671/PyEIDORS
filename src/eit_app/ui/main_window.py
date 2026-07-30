@@ -917,6 +917,9 @@ class EITWorkstation(QMainWindow):
         # Ctrl+I — I as in Interop.  Not used elsewhere in the app.
         self._action_interop_hub.setShortcut(QKeySequence("Ctrl+I"))
         self._action_interop_hub.triggered.connect(self._open_interop_hub)
+        self._action_model_assets = self._menu_tools.addAction("")
+        self._action_model_assets.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        self._action_model_assets.triggered.connect(self._open_model_asset_manager)
         self._menu_tools.addSeparator()
 
         # Compute precision submenu lives under Tools, not View — the
@@ -1276,6 +1279,7 @@ class EITWorkstation(QMainWindow):
 
         self._menu_tools.setTitle(t("menu.tools"))
         self._action_interop_hub.setText(t("menu.tools.interop_hub"))
+        self._action_model_assets.setText(t("menu.tools.model_assets"))
         # Compute precision moved from View to Tools — use the new
         # menu.tools.precision* keys (see i18n).
         self._menu_precision.setTitle(t("menu.tools.precision"))
@@ -1794,11 +1798,16 @@ class EITWorkstation(QMainWindow):
         # difference voltages even if the backend doesn't populate them.
         self._last_auto_ref_frame = self._reference_frame
         self._last_auto_tgt_frame = target_frame
-        request = self._build_auto_reconstruction_request(
-            target_frame,
-            reference_frame=self._reference_frame,
-            request_source="hardware_auto_live",
-        )
+        try:
+            request = self._build_auto_reconstruction_request(
+                target_frame,
+                reference_frame=self._reference_frame,
+                request_source="hardware_auto_live",
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            self._auto_recon_busy = False
+            self._on_error(f"Realtime Bridge v3 protocol validation blocked: {exc}")
+            return
 
         def _start() -> None:
             accepted = self._recon_ctrl.reconstruct(request)
@@ -2365,6 +2374,79 @@ class EITWorkstation(QMainWindow):
             "drive_value": stim_uA * 1.0e-6,
         }
 
+    def _bound_realtime_bridge_metadata(
+        self,
+        target_frame: FrameData,
+    ) -> dict[str, object]:
+        """Prove the live hardware protocol against the bound v3 model."""
+
+        from pyeidors.electrodes.patterns import StimMeasPatternManager
+        from pyeidors.interop import (
+            ModelContextFactory,
+            ModelRegistry,
+            prove_protocol_mapping,
+            resolve_actual_stimulation,
+        )
+
+        registry = getattr(self, "_bridge_model_registry", None)
+        if registry is None:
+            registry = ModelRegistry()
+            self._bridge_model_registry = registry
+        registered = registry.bound_model("realtime")
+        if registered is None:
+            return {}
+        context = ModelContextFactory(registry).for_flow("realtime")
+
+        from eit_app.controllers.forward_solver_controller import (
+            _pattern_and_electrode_count,
+        )
+
+        forward_config = self._current_hardware_forward_model_config().with_overrides(
+            drive_mode="normalized",
+            drive_value=1.0,
+        )
+        hardware_pattern, total_electrodes = _pattern_and_electrode_count(
+            forward_config
+        )
+        if total_electrodes != len(context.electrode_specs):
+            raise ValueError(
+                "Realtime hardware/model electrode count mismatch: "
+                f"hardware={total_electrodes}, "
+                f"model={len(context.electrode_specs)}."
+            )
+        manager = StimMeasPatternManager(
+            hardware_pattern,
+            mesh_tdim=int(forward_config.mesh_dimension),
+        )
+        session_metadata = dict(getattr(self._rec_ctrl, "_session_metadata", {}) or {})
+        actual_current = resolve_actual_stimulation(
+            manager.stim_matrix,
+            frame_metadata=dict(target_frame.metadata or {}),
+            session_metadata=session_metadata,
+            device_config=self._device_config,
+        )
+        mapping = prove_protocol_mapping(
+            model_stim_matrix=context.protocol.stim_matrix,
+            model_meas_matrices=context.effective_meas_matrices,
+            hardware_stim_matrix=actual_current.stim_matrix,
+            hardware_meas_matrices=manager.meas_matrices,
+        )
+        if int(target_frame.n_meas) != len(mapping.channel_permutation):
+            raise ValueError(
+                "Realtime frame/proven protocol channel count mismatch: "
+                f"frame={target_frame.n_meas}, "
+                f"protocol={len(mapping.channel_permutation)}."
+            )
+        return {
+            "model_id": context.registered.model_id,
+            "forward_fingerprint": context.registered.forward_fingerprint,
+            "protocol_layout_hash": context.registered.protocol_layout_hash,
+            "protocol_physics_hash": context.registered.protocol_physics_hash,
+            "channel_mapping": mapping.to_mapping(),
+            "actual_current_resolution": actual_current.to_mapping(),
+            "runtime_protocol_fingerprint": mapping.runtime_fingerprint,
+        }
+
     def _build_auto_reconstruction_request(
         self,
         target_frame: FrameData,
@@ -2402,6 +2484,7 @@ class EITWorkstation(QMainWindow):
             "z_center": float(self._device_config.get("z_center", 0.0)),
             "request_source": request_source,
         }
+        metadata.update(self._bound_realtime_bridge_metadata(target_frame))
         if warmup_only:
             metadata["warmup_only"] = True
         return ReconstructionRequest(
@@ -2442,7 +2525,16 @@ class EITWorkstation(QMainWindow):
         ):
             self._recon_prewarm_timer.stop()
             return
-        _request, signature = self._build_realtime_recon_prewarm_payload()
+        try:
+            _request, signature = self._build_realtime_recon_prewarm_payload()
+        except (KeyError, TypeError, ValueError) as exc:
+            self._recon_prewarm_timer.stop()
+            self._recon_prewarm_requested_signature = None
+            self._status_bar.showMessage(
+                f"Realtime Bridge v3 prewarm blocked: {exc}",
+                15000,
+            )
+            return
         self._recon_prewarm_requested_signature = signature
         if (
             self._recon_prewarm_ready_signature == signature
@@ -3085,6 +3177,80 @@ class EITWorkstation(QMainWindow):
         ref_entry = config.get("reference_entry")
         method = config.get("method", "gn-difference")
         use_part = config.get("use_part", "real")
+        session_binding: dict[str, object] = {}
+        target_session_id = target_entry.get("session_id")
+        reference_session_id = (
+            None if ref_entry is None else ref_entry.get("session_id")
+        )
+        session_ids = {
+            int(value)
+            for value in (target_session_id, reference_session_id)
+            if value is not None
+        }
+        if session_ids:
+            sessions = [
+                self._db_ctrl.db.get_session(session_id)
+                for session_id in sorted(session_ids)
+            ]
+            if any(session is None for session in sessions):
+                self._on_error("Database reconstruction session no longer exists.")
+                return
+            identities = {
+                (
+                    str(session.get("model_id") or ""),
+                    str(session.get("forward_fingerprint") or ""),
+                    str(session.get("protocol_layout_hash") or ""),
+                    str(session.get("protocol_physics_hash") or ""),
+                )
+                for session in sessions
+                if session is not None
+            }
+            if any(not identity[0] for identity in identities):
+                self._on_error(
+                    "This historical session is not bound to a Bridge v3 model. "
+                    "Validate and bind a model before reconstruction."
+                )
+                return
+            if len(identities) != 1:
+                self._on_error(
+                    "Reference and target sessions use different Bridge v3 models "
+                    "or protocols."
+                )
+                return
+            identity = next(iter(identities))
+            try:
+                from pyeidors.interop import ProtocolChannelMapping
+
+                channel_mappings = [
+                    ProtocolChannelMapping.from_mapping(
+                        json.loads(str(session.get("channel_mapping_json") or ""))
+                    )
+                    for session in sessions
+                    if session is not None
+                ]
+            except (TypeError, ValueError):
+                self._on_error(
+                    "The session Bridge v3 channel mapping is invalid; rebind it."
+                )
+                return
+            mapping_fingerprints = {
+                mapping.runtime_fingerprint for mapping in channel_mappings
+            }
+            if len(mapping_fingerprints) != 1:
+                self._on_error(
+                    "Reference and target sessions use different channel mappings "
+                    "or actual stimulation currents."
+                )
+                return
+            channel_mapping = channel_mappings[0].to_mapping()
+            session_binding = {
+                "db_session_ids": sorted(session_ids),
+                "model_id": identity[0],
+                "forward_fingerprint": identity[1],
+                "protocol_layout_hash": identity[2],
+                "protocol_physics_hash": identity[3],
+                "channel_mapping": channel_mapping,
+            }
 
         try:
             from pyeidors.data.frame_io import read_frame_csv
@@ -3160,6 +3326,7 @@ class EITWorkstation(QMainWindow):
             "db_save_voltage_fit": bool(config.get("save_voltage_fit", False)),
             "db_method_label": config.get("method_label", method),
             "request_source": "db",
+            **session_binding,
         }
         alpha_value = (
             float(
@@ -4165,16 +4332,189 @@ class EITWorkstation(QMainWindow):
             }
         )
 
+    def _bind_database_session_to_registered_model(
+        self,
+        session_id: int,
+        *,
+        model_id: str,
+        registry: object,
+    ) -> None:
+        """Prove every historical frame current before persisting one binding."""
+
+        from eit_app.controllers.forward_solver_controller import (
+            _pattern_and_electrode_count,
+        )
+        from pyeidors.electrodes.patterns import StimMeasPatternManager
+        from pyeidors.interop import (
+            ModelContextFactory,
+            prove_protocol_mapping,
+            resolve_actual_stimulation,
+        )
+
+        session = self._db_ctrl.db.get_session(int(session_id))
+        if session is None:
+            raise KeyError(f"Database session {session_id} no longer exists")
+        try:
+            session_metadata = json.loads(str(session.get("metadata_json") or "{}"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Database session metadata is invalid JSON") from exc
+        if not isinstance(session_metadata, dict):
+            raise ValueError("Database session metadata must be an object")
+        config_payload = {
+            **session_metadata,
+            "n_elec": session.get("n_elec") or session_metadata.get("n_elec", 16),
+            "stim_pattern": session.get("stim_pattern")
+            or session_metadata.get("stim_pattern", "{ad}"),
+            "meas_pattern": session.get("meas_pattern")
+            or session_metadata.get("meas_pattern", "{ad}"),
+            "mesh_dimension": (
+                3
+                if int(session.get("mea_mode") or session_metadata.get("mea_mode", 2))
+                == 3
+                else 2
+            ),
+            "drive_mode": "normalized",
+            "drive_value": 1.0,
+        }
+        forward_config = ForwardModelConfig.from_mapping(config_payload)
+        pattern, total_electrodes = _pattern_and_electrode_count(forward_config)
+        context = ModelContextFactory(registry).create(model_id)
+        if total_electrodes != len(context.electrode_specs):
+            raise ValueError(
+                "Database session/model electrode count mismatch: "
+                f"session={total_electrodes}, model={len(context.electrode_specs)}."
+            )
+        manager = StimMeasPatternManager(
+            pattern,
+            mesh_tdim=int(forward_config.mesh_dimension),
+        )
+        frame_rows = self._db_ctrl.db.query_frames(int(session_id))
+        frame_metadata_values: list[dict[str, object]] = []
+        for row in frame_rows:
+            try:
+                value = json.loads(str(row.get("frame_metadata_json") or "{}"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Database frame {row.get('id')} metadata is invalid JSON"
+                ) from exc
+            frame_metadata_values.append(value if isinstance(value, dict) else {})
+        if not frame_metadata_values:
+            frame_metadata_values.append({})
+
+        mappings = []
+        for frame_metadata in frame_metadata_values:
+            actual = resolve_actual_stimulation(
+                manager.stim_matrix,
+                frame_metadata=frame_metadata,
+                session_metadata=session_metadata,
+                device_config=self._device_config,
+            )
+            mappings.append(
+                prove_protocol_mapping(
+                    model_stim_matrix=context.protocol.stim_matrix,
+                    model_meas_matrices=context.effective_meas_matrices,
+                    hardware_stim_matrix=actual.stim_matrix,
+                    hardware_meas_matrices=manager.meas_matrices,
+                )
+            )
+        fingerprints = {mapping.runtime_fingerprint for mapping in mappings}
+        if len(fingerprints) != 1:
+            raise ValueError(
+                "Database session frames use different protocol mappings or "
+                "actual currents; one session binding cannot represent them."
+            )
+        self._db_ctrl.db.bind_session_model(
+            int(session_id),
+            model_id,
+            registry=registry,
+            channel_mapping=mappings[0].to_mapping(),
+        )
+
     def _apply_interop_import(self, target: str, loaded_bundle) -> str:
         self._ensure_interop_services()
         preview = self._interop_importer.preview_loaded_package(loaded_bundle)
-        config = preview.forward_model_config
+        from pyeidors.interop import ModelRegistry
+
+        registry = getattr(self, "_bridge_model_registry", None)
+        if registry is None:
+            registry = ModelRegistry()
+            self._bridge_model_registry = registry
+        registered = registry.register(
+            loaded_bundle.root,
+            display_name=str(
+                loaded_bundle.manifest.script_path or loaded_bundle.root.name
+            ),
+        )
+        semantics = {
+            **dict(preview.forward_model_config.interop_semantics or {}),
+            "model_id": registered.model_id,
+            "forward_fingerprint": registered.forward_fingerprint,
+            "protocol_layout_hash": registered.protocol_layout_hash,
+            "protocol_physics_hash": registered.protocol_physics_hash,
+            "managed_asset_path": str(registered.asset_path),
+        }
+        config = preview.forward_model_config.with_overrides(
+            mesh_source="interop",
+            mesh_path=str((registered.asset_path / "geometry.mat").resolve()),
+            interop_semantics=semantics,
+        )
         self._last_imported_bundle = loaded_bundle
         if loaded_bundle.geometry_payload is not None:
             self._interop_geometry_asset = loaded_bundle.geometry_payload
         if loaded_bundle.measurements is not None:
             self._interop_measurements_asset = loaded_bundle.measurements
         self._apply_reconstruction_preset(loaded_bundle.reconstruction_preset)
+
+        if target == "all":
+            config.require_interop_forward_ready()
+            registry.apply_to_all(registered.model_id)
+            messages = [
+                self._apply_interop_import(flow_target, loaded_bundle)
+                for flow_target in ("hardware", "simulation", "dataset")
+            ]
+            selected_entries = (
+                self._selected_reference_entry,
+                self._selected_target_entry,
+            )
+            session_ids = {
+                int(entry["session_id"])
+                for entry in selected_entries
+                if isinstance(entry, dict) and entry.get("session_id") is not None
+            }
+            if session_ids:
+                answer = QMessageBox.question(
+                    self,
+                    t("dlg.interop.title"),
+                    t(
+                        "main.interop.bind_selected_sessions",
+                        count=len(session_ids),
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    for session_id in sorted(session_ids):
+                        self._bind_database_session_to_registered_model(
+                            session_id,
+                            model_id=registered.model_id,
+                            registry=registry,
+                        )
+                    messages.append(
+                        t(
+                            "main.interop.bound_selected_sessions",
+                            count=len(session_ids),
+                        )
+                    )
+            return "\n".join(messages)
+
+        flow = {
+            "hardware": "realtime",
+            "simulation": "simulation",
+            "dataset": "dataset",
+        }.get(target)
+        if flow is not None:
+            config.require_interop_forward_ready()
+            registry.bind(flow, registered.model_id)
 
         if target == "hardware":
             self._device_config.update(
@@ -4324,6 +4664,19 @@ class EITWorkstation(QMainWindow):
             apply_import_callback=self._apply_interop_import,
             smoke_validate_callback=self._run_interop_smoke_validation,
         )
+        dialog.exec()
+
+    def _open_model_asset_manager(self) -> None:
+        from eit_app.ui.dialogs.model_asset_manager_dialog import (
+            ModelAssetManagerDialog,
+        )
+        from pyeidors.interop import ModelRegistry
+
+        registry = getattr(self, "_bridge_model_registry", None)
+        if registry is None:
+            registry = ModelRegistry()
+            self._bridge_model_registry = registry
+        dialog = ModelAssetManagerDialog(self, registry=registry)
         dialog.exec()
 
     def _open_about_dialog(self) -> None:

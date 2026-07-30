@@ -44,7 +44,10 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.precision_float64": "Float64 (\u9ad8\u7cbe\u5ea6)",  # Float64 (高精度)
     "main.status.precision_changed": "\u8ba1\u7b97\u7cbe\u5ea6\u5df2\u5207\u6362\u4e3a {mode}\uff0c\u4e0b\u4e00\u6b21\u91c7\u96c6 / \u6c42\u89e3\u751f\u6548\u3002",  # 计算精度已切换为 {mode}，下一次采集 / 求解生效。
     "menu.tools": "\u5de5\u5177(&T)",  # 工具(&T)
-    "menu.tools.interop_hub": "EIDORS \u4e92\u64cd\u4f5c(&I)\u2026",  # EIDORS 互操作(&I)…
+    "menu.tools.interop_hub": "\u52a0\u8f7d EIDORS \u6a21\u578b(&I)\u2026",  # 加载 EIDORS 模型(&I)…
+    "menu.tools.model_assets": "Bridge v3 \u6a21\u578b\u8d44\u4ea7\u7ba1\u7406(&A)\u2026",  # Bridge v3 模型资产管理(&A)…
+    "main.interop.bind_selected_sessions": "\u662f\u5426\u540c\u65f6\u9a8c\u8bc1\u5e76\u5c06\u5f53\u524d\u9009\u4e2d\u7684 {count} \u4e2a\u6570\u636e\u5e93\u4f1a\u8bdd\u7ed1\u5b9a\u5230\u8be5\u6a21\u578b\uff1f",  # 是否同时验证并将当前选中的 {count} 个数据库会话绑定到该模型？
+    "main.interop.bound_selected_sessions": "\u5df2\u9a8c\u8bc1\u5e76\u7ed1\u5b9a {count} \u4e2a\u9009\u4e2d\u7684\u6570\u636e\u5e93\u4f1a\u8bdd\u3002",  # 已验证并绑定 {count} 个选中的数据库会话。
     "menu.tools.cache_telemetry": "\u7f13\u5b58\u9065\u6d4b(&C)\u2026",  # 缓存遥测(&C)…
     "main.status.recon_running": "\u6b63\u5728\u8fd0\u884c {method}\u2026",  # 正在运行 {method}…
     "main.status.recon_failed": "\u91cd\u6784\u5931\u8d25\uff1a{error}",  # 重构失败：{error}
@@ -969,6 +972,17 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.import_target.hardware": "\u786c\u4ef6\u914d\u7f6e\u6a21\u677f",  # 硬件配置模板
     "dlg.interop.import_target.simulation": "\u4eff\u771f\u914d\u7f6e",  # 仿真配置
     "dlg.interop.import_target.dataset": "\u6570\u636e\u96c6\u914d\u7f6e",  # 数据集配置
+    "dlg.interop.import_target.all": "\u5e94\u7528\u5230\u4eff\u771f\u3001\u6570\u636e\u96c6\u548c\u5b9e\u65f6\u6210\u50cf",  # 应用到仿真、数据集和实时成像
+    "dlg.interop.msg.script_side_effect_warning": (
+        "PyEIDORS \u5c06\u542f\u52a8\u5168\u65b0 MATLAB \u8fdb\u7a0b\uff0c\u5e76\u5728\u4e34\u65f6\u5de5\u4f5c\u76ee\u5f55\u4e2d\u6267\u884c\u8be5\u811a\u672c\u3002"
+        "\u811a\u672c\u4ecd\u53ef\u80fd\u4ea7\u751f\u5176\u81ea\u8eab\u7684\u5916\u90e8\u6587\u4ef6\u3001\u7f51\u7edc\u3001\u8bbe\u5907\u6216\u8fdb\u7a0b\u526f\u4f5c\u7528\u3002"
+        "\u662f\u5426\u7ee7\u7eed\uff1f"
+    ),  # PyEIDORS 将启动全新 MATLAB 进程，并在临时工作目录中执行该脚本。脚本仍可能产生其自身的外部副作用。是否继续？
+    "dlg.interop.selector.model": "\u6a21\u578b\u53d8\u91cf/\u5b8c\u6574\u8def\u5f84",  # 模型变量/完整路径
+    "dlg.interop.selector.background": "\u80cc\u666f\u56fe\u50cf\u53d8\u91cf/\u5b8c\u6574\u8def\u5f84",  # 背景图像变量/完整路径
+    "dlg.interop.selector.target": "\u76ee\u6807\u56fe\u50cf\u53d8\u91cf/\u5b8c\u6574\u8def\u5f84",  # 目标图像变量/完整路径
+    "dlg.interop.selector.reference_data": "\u53c2\u8003\u6570\u636e\u53d8\u91cf/\u5b8c\u6574\u8def\u5f84",  # 参考数据变量/完整路径
+    "dlg.interop.selector.target_data": "\u76ee\u6807\u6570\u636e\u53d8\u91cf/\u5b8c\u6574\u8def\u5f84",  # 目标数据变量/完整路径
     "dlg.interop.import_target.measurements": "\u4ec5\u8fb9\u754c\u7535\u538b\u6570\u636e",  # 仅边界电压数据
     "dlg.interop.import_target.geometry": "\u4ec5\u51e0\u4f55\u8d44\u4ea7",  # 仅几何资产
     "dlg.interop.auto_smoke_check": "\u5bfc\u5165\u540e\u81ea\u52a8\u505a\u4e00\u6b21\u9006\u95ee\u9898\u70df\u6d4b\u9a8c\u8bc1",  # 导入后自动做一次逆问题烟测验证

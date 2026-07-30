@@ -299,6 +299,21 @@ class InteropHubDialog(QDialog):
         self._source_hint.setWordWrap(True)
         set_hint_text(self._source_hint)
         source_layout.addRow(self._source_hint)
+        self._selector_edits: dict[str, QLineEdit] = {}
+        self._selector_labels: dict[str, QLabel] = {}
+        for selector_key in (
+            "fwd_model_var",
+            "background_image_var",
+            "target_image_var",
+            "homogeneous_data_var",
+            "target_data_var",
+        ):
+            label = QLabel("")
+            editor = QLineEdit()
+            editor.setPlaceholderText("可选；例如 inv_model.fwd_model")
+            self._selector_labels[selector_key] = label
+            self._selector_edits[selector_key] = editor
+            source_layout.addRow(label, editor)
         left_layout.addWidget(self._source_box)
 
         self._actions_box = QGroupBox("")
@@ -392,6 +407,7 @@ class InteropHubDialog(QDialog):
             "dlg.interop.import_target.hardware",
             "dlg.interop.import_target.simulation",
             "dlg.interop.import_target.dataset",
+            "dlg.interop.import_target.all",
             "dlg.interop.import_target.measurements",
             "dlg.interop.import_target.geometry",
         ):
@@ -700,6 +716,15 @@ class InteropHubDialog(QDialog):
                     ),
                 )
                 return
+            answer = QMessageBox.warning(
+                self,
+                t("dlg.interop.title"),
+                t("dlg.interop.msg.script_side_effect_warning"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         environment = self._manual_environment_from_fields()
         if environment is not None:
@@ -722,6 +747,11 @@ class InteropHubDialog(QDialog):
                 source,
                 environment=environment,
                 output_dir=self._capture_output_edit.text().strip(),
+                selectors={
+                    key: editor.text().strip()
+                    for key, editor in self._selector_edits.items()
+                    if editor.text().strip()
+                },
             )
             preview = self._importer.preview_loaded_package(loaded)
         except Exception as exc:
@@ -1052,6 +1082,15 @@ class InteropHubDialog(QDialog):
         self._source_edit.setPlaceholderText(t("dlg.interop.source.placeholder"))
         self._lbl_capture.setText(t("dlg.interop.source.capture_label"))
         self._source_hint.setText(t("dlg.interop.source.hint"))
+        selector_labels = {
+            "fwd_model_var": "dlg.interop.selector.model",
+            "background_image_var": "dlg.interop.selector.background",
+            "target_image_var": "dlg.interop.selector.target",
+            "homogeneous_data_var": "dlg.interop.selector.reference_data",
+            "target_data_var": "dlg.interop.selector.target_data",
+        }
+        for key, label_key in selector_labels.items():
+            self._selector_labels[key].setText(t(label_key))
 
         # Import tab — step 3 actions
         self._actions_box.setTitle(t("dlg.interop.actions.title"))
@@ -1093,6 +1132,7 @@ class InteropHubDialog(QDialog):
             "dlg.interop.import_target.hardware",
             "dlg.interop.import_target.simulation",
             "dlg.interop.import_target.dataset",
+            "dlg.interop.import_target.all",
             "dlg.interop.import_target.measurements",
             "dlg.interop.import_target.geometry",
         ]

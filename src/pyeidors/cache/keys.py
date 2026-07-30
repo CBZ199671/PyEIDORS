@@ -23,6 +23,12 @@ def _sha256_file_content(path: Path) -> str:
     return digest.hexdigest()
 
 
+def hash_file_content(path: str | Path) -> str:
+    """Hash file bytes with bounded reads, independent of path metadata."""
+
+    return _sha256_file_content(Path(path))
+
+
 def _update_digest_with_array_bytes(
     digest: Any,
     array: np.ndarray,

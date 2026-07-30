@@ -37,7 +37,9 @@ from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 import eit_app.ui.path_explorer as path_explorer_module
 from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
+from eit_app.ui.dialogs.model_asset_manager_dialog import ModelAssetManagerDialog
 from eit_app.ui.main_window import EITWorkstation
+from pyeidors.interop import ModelRegistry
 
 
 def _get_app() -> QApplication:
@@ -66,9 +68,19 @@ def _standard_geometry_payload(*, n_elec: int = 8) -> dict:
         [[index + 2] for index in range(n_elec)], dtype=np.int64
     )
     electrode_counts = np.ones(n_elec, dtype=np.int64)
+    stim_matrix = np.zeros((n_elec, n_elec), dtype=float)
+    meas_matrices = np.zeros((n_elec, 1, n_elec), dtype=float)
+    for index in range(n_elec):
+        stim_matrix[index, index] = 1.0
+        stim_matrix[index, (index + 1) % n_elec] = -1.0
+        meas_matrices[index, 0, (index + 2) % n_elec] = 1.0
+        meas_matrices[index, 0, (index + 3) % n_elec] = -1.0
     return {
-        "exchange_format": "eidors_pyeidors_bridge_v1",
+        "exchange_format": "eidors_pyeidors_geometry_v3",
         "source_framework": "eidors",
+        "dimension": 2,
+        "cell_type": "triangle",
+        "boundary_entity_type": "edge",
         "nodes": nodes,
         "elems": elems_array,
         "boundary_edges": boundary_edges,
@@ -76,8 +88,18 @@ def _standard_geometry_payload(*, n_elec: int = 8) -> dict:
         "electrode_node_counts": electrode_counts,
         "n_elec": n_elec,
         "background": 1.0,
+        "background_elem_data": np.ones(len(elems_array), dtype=float),
+        "target_elem_data": np.full(len(elems_array), 1.1, dtype=float),
         "truth_elem_data": np.ones(len(elems_array), dtype=float),
         "contact_impedance": 0.01,
+        "contact_impedance_present": np.ones(n_elec, dtype=bool),
+        "stim_matrix": stim_matrix,
+        "stim_matrix_raw": stim_matrix,
+        "meas_matrices": meas_matrices,
+        "measurement_counts": np.ones(n_elec, dtype=np.int64),
+        "normalize_measurements": False,
+        "stimulation_supported": True,
+        "effective_gnd_node": 1,
         "mesh_name": "unit_test_mesh",
         "mesh_level": "unit",
         "scenario_name": "unit_case",
@@ -85,7 +107,18 @@ def _standard_geometry_payload(*, n_elec: int = 8) -> dict:
 
 
 def _make_bridge_dir(tmp_path: Path, *, n_elec: int = 8) -> Path:
-    config = ForwardModelConfig(n_elec=n_elec, stim_pattern="{ad}", meas_pattern="{ad}")
+    geometry = _standard_geometry_payload(n_elec=n_elec)
+    config = ForwardModelConfig(
+        n_elec=n_elec,
+        measurement_protocol="custom",
+        custom_stim_matrix=geometry["stim_matrix"],
+        custom_meas_matrices=[
+            matrix for matrix in np.asarray(geometry["meas_matrices"])
+        ],
+        drive_mode="total_current",
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+    )
     n_points = config.point_count()
     measurements = {
         "homogeneous": np.linspace(0.0, 1.0, n_points, dtype=float),
@@ -97,7 +130,7 @@ def _make_bridge_dir(tmp_path: Path, *, n_elec: int = 8) -> Path:
     save_bridge_package(
         root,
         manifest,
-        geometry_payload=_standard_geometry_payload(n_elec=n_elec),
+        geometry_payload=geometry,
         measurements=measurements,
         forward_model_config=config,
         include_capture_script=True,
@@ -169,6 +202,8 @@ def test_interop_hub_can_preview_and_import_into_simulation(
     _get_app()
     bridge_dir = _make_bridge_dir(tmp_path, n_elec=8)
     window = EITWorkstation()
+    registry = ModelRegistry(tmp_path / "model_registry")
+    window._bridge_model_registry = registry
     window.show()
     _get_app().processEvents()
 
@@ -210,17 +245,47 @@ def test_interop_hub_can_preview_and_import_into_simulation(
     assert window._sim_forward_model_config.n_elec == 8
     imported_cfg = window._current_sim_forward_model_config()
     assert imported_cfg.mesh_source == "interop"
-    assert Path(imported_cfg.mesh_path) == (bridge_dir / "geometry.mat").resolve()
+    registered = registry.get(imported_cfg.interop_semantics["model_id"])
+    assert (
+        Path(imported_cfg.mesh_path)
+        == (registered.asset_path / "geometry.mat").resolve()
+    )
+    assert registry.bound_model("simulation").model_id == registered.model_id
     request = window._build_sim_forward_request(request_source="interop_test")
     assert request.forward_model_config["mesh_source"] == "interop"
     assert (
         Path(request.forward_model_config["mesh_path"])
-        == (bridge_dir / "geometry.mat").resolve()
+        == (registered.asset_path / "geometry.mat").resolve()
     )
     assert window._tab_widget.currentWidget() is window._sim_tab
 
     dialog.close()
     window.close()
+
+
+@pytest.mark.gui
+def test_v761_model_asset_manager_lists_and_binds_v3_assets(
+    tmp_path: Path,
+) -> None:
+    _get_app()
+    bridge_dir = _make_bridge_dir(tmp_path, n_elec=8)
+    registry = ModelRegistry(tmp_path / "registry")
+    registered = registry.register(bridge_dir, display_name="EIDORS unit model")
+
+    dialog = ModelAssetManagerDialog(None, registry=registry)
+    dialog.show()
+    _get_app().processEvents()
+
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, 1).text() == registered.model_id
+    assert registered.model_id in dialog.details.toPlainText()
+    dialog._apply_selected_to_all()
+    assert {flow: model.model_id for flow, model in registry.bindings().items()} == {
+        "simulation": registered.model_id,
+        "dataset": registered.model_id,
+        "realtime": registered.model_id,
+    }
+    dialog.close()
 
 
 @pytest.mark.gui
@@ -418,6 +483,7 @@ def test_v128_interop_hub_secondary_menu_actions_smoke(
             *,
             environment: EidorsEnvironment | None = None,
             output_dir: str | Path | None = None,
+            selectors: dict[str, str] | None = None,
         ):
             return InteropBundleImporter().load_package(source_path)
 
@@ -523,6 +589,7 @@ def test_v128_interop_hub_secondary_menu_actions_smoke(
             "hardware",
             "simulation",
             "dataset",
+            "all",
             "measurements",
             "geometry",
         ]
@@ -662,13 +729,18 @@ def test_v129_bridge_runner_uses_tolerant_matlab_output_capture(
     )
 
     with pytest.raises(RuntimeError, match="非 UTF-8"):
-        runner.run_capture(env, source, tmp_path / "out")
+        output = tmp_path / "out"
+        runner.run_capture(env, source, output)
 
     assert calls
     assert calls[0][1] == "-batch"
+    request = json.loads((output / "capture_request.json").read_text(encoding="utf-8"))
+    assert "work_dir" in request
+    assert not Path(request["work_dir"]).exists()
+    assert "addpath(script_dir)" in CAPTURE_SCRIPT_TEMPLATE
 
 
-def test_v129_bridge_package_filters_matlab_private_loadmat_keys(
+def test_v753_legacy_single_mat_package_fails_closed(
     tmp_path: Path,
 ) -> None:
     from scipy.io import savemat
@@ -694,10 +766,11 @@ def test_v129_bridge_package_filters_matlab_private_loadmat_keys(
         json.dumps(manifest.to_mapping()), encoding="utf-8"
     )
 
-    loaded = load_bridge_package(root)
-
-    assert loaded.geometry_payload is not None
-    assert all(not key.startswith("__") for key in loaded.geometry_payload)
+    with pytest.raises(
+        ValueError,
+        match="missing required file roles: model, protocol, fields",
+    ):
+        load_bridge_package(root)
 
 
 def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(

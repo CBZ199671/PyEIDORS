@@ -66,7 +66,7 @@ def write_dataset_sample_package(
     *,
     ground_truth: Any,
     boundary_voltages: Any,
-    background_conductivity: float,
+    background_conductivity: Any,
     n_inhomogeneities: int,
 ) -> Path:
     """Write one dataset sample as an HDF5 package."""
@@ -75,9 +75,7 @@ def write_dataset_sample_package(
     arrays = {
         "ground_truth": np.asarray(ground_truth),
         "boundary_voltages": np.asarray(boundary_voltages),
-        "background_conductivity": np.asarray(
-            background_conductivity, dtype=np.float64
-        ),
+        "background_conductivity": np.asarray(background_conductivity),
         "n_inhomogeneities": np.asarray(n_inhomogeneities, dtype=np.int64),
     }
     metadata = {

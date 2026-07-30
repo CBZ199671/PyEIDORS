@@ -735,8 +735,36 @@ def _create_forward_system(
     runtime: dict[str, Any],
     pattern: Any,
     total_electrodes: int,
+    flow: str = "simulation",
 ) -> Any:
     from pyeidors import EITSystem
+
+    runtime_options = {
+        "solver_mode": runtime["solver_mode"],
+        "line_search_mode": runtime["line_search_mode"],
+        "linear_solver": runtime["linear_solver"],
+        "preconditioner": runtime["preconditioner"],
+        "fast_linear_path": runtime["fast_linear_path"],
+        "linear_backend_config": {
+            "solver_preset": runtime["forward_solver_preset"],
+            "mat_solve_mode": runtime["forward_mat_solve"],
+            "petsc_device": runtime["petsc_device"],
+        },
+        "petsc_device": runtime["petsc_device"],
+        "device": runtime["device"],
+        "forward_backend": runtime["forward_backend"],
+        "mesh_family": runtime["mesh_family"],
+        "potential_order": forward_cfg.potential_order,
+        "acceleration_profile": runtime["acceleration_profile"],
+    }
+    model_context = _bound_model_context_from_config(forward_cfg, flow=flow)
+    if model_context is not None:
+        system = model_context.create_system(
+            initialize_inverse=False,
+            **runtime_options,
+        )
+        setattr(system, "_bridge_v3_model_context", model_context)
+        return system
 
     return EITSystem(
         n_elec=total_electrodes,
@@ -752,23 +780,66 @@ def _create_forward_system(
         ),
         electrode_model=forward_cfg.electrode_model,
         base_conductivity=forward_cfg.background_conductivity,
-        solver_mode=runtime["solver_mode"],
-        line_search_mode=runtime["line_search_mode"],
-        linear_solver=runtime["linear_solver"],
-        preconditioner=runtime["preconditioner"],
-        fast_linear_path=runtime["fast_linear_path"],
-        linear_backend_config={
-            "solver_preset": runtime["forward_solver_preset"],
-            "mat_solve_mode": runtime["forward_mat_solve"],
-            "petsc_device": runtime["petsc_device"],
-        },
-        petsc_device=runtime["petsc_device"],
-        device=runtime["device"],
-        forward_backend=runtime["forward_backend"],
-        mesh_family=runtime["mesh_family"],
-        potential_order=forward_cfg.potential_order,
-        acceleration_profile=runtime["acceleration_profile"],
+        **runtime_options,
     )
+
+
+def _bound_model_context_from_config(
+    forward_cfg: ForwardModelConfig,
+    *,
+    flow: str,
+) -> Any | None:
+    """Resolve one exact registered model or reject unmanaged interop input."""
+
+    if forward_cfg.mesh_source != "interop":
+        return None
+    semantics = dict(forward_cfg.interop_semantics or {})
+    model_id = str(semantics.get("model_id", "")).strip()
+    if not model_id:
+        raise ValueError(
+            "Imported forward runs require a registered Bridge v3 model_id; "
+            "load and bind the package through the model asset manager."
+        )
+
+    from pyeidors.interop import ModelContextFactory, ModelRegistry
+
+    registry = ModelRegistry()
+    bound = registry.bound_model(flow)
+    if bound is None:
+        raise ValueError(f"Bridge v3 model {model_id} is not bound to the {flow} flow.")
+    if bound.model_id != model_id:
+        raise ValueError(
+            f"Bridge v3 {flow} binding changed: request={model_id}, "
+            f"bound={bound.model_id}."
+        )
+    context = ModelContextFactory(registry).for_flow(flow)
+    expected_hashes = {
+        "forward_fingerprint": context.registered.forward_fingerprint,
+        "protocol_layout_hash": context.registered.protocol_layout_hash,
+        "protocol_physics_hash": context.registered.protocol_physics_hash,
+    }
+    for name, actual in expected_hashes.items():
+        expected = str(semantics.get(name, "")).strip()
+        if expected and expected != actual:
+            raise ValueError(
+                f"Bridge v3 {name} changed after the request was created: "
+                f"request={expected}, registered={actual}."
+            )
+    return context
+
+
+def _bridge_model_context(system: Any) -> Any | None:
+    return getattr(system, "_bridge_v3_model_context", None)
+
+
+def _interop_field_override_mode(forward_cfg: ForwardModelConfig) -> str:
+    semantics = dict(forward_cfg.interop_semantics or {})
+    mode = str(semantics.get("field_override_mode", "imported")).strip().lower()
+    if mode not in {"imported", "drawn", "random", "uniform"}:
+        raise ValueError(
+            "Bridge v3 field_override_mode must be imported, drawn, random, or uniform."
+        )
+    return mode
 
 
 def _configure_forward_system_from_request(
@@ -907,33 +978,19 @@ def _setup_generated_forward_system(
     forward_cfg: ForwardModelConfig,
     runtime: dict[str, Any],
 ) -> None:
-    if forward_cfg.mesh_source == "interop":
-        mesh_path = Path(forward_cfg.mesh_path)
-        if not mesh_path.is_file():
-            raise FileNotFoundError(
-                "Imported EIDORS geometry file was not found: "
-                f"{mesh_path or '<empty>'}. Reload the Bridge Package."
-            )
-        from pyeidors.interop import build_mesh_from_exchange_mat
-
-        imported_mesh, _payload = build_mesh_from_exchange_mat(mesh_path)
-        imported_dimension = int(imported_mesh.topology.dim)
-        if imported_dimension != int(forward_cfg.mesh_dimension):
+    if _bridge_model_context(system) is not None:
+        if forward_cfg.mesh_source != "interop":
             raise ValueError(
-                "Imported geometry dimension does not match ForwardModelConfig: "
-                f"{imported_dimension} != {forward_cfg.mesh_dimension}"
+                "A registered Bridge v3 context cannot run as a generated mesh."
             )
-        imported_electrodes = int(
-            getattr(imported_mesh, "n_electrodes", forward_cfg.total_electrodes())
-        )
-        if imported_electrodes != forward_cfg.total_electrodes():
-            raise ValueError(
-                "Imported geometry electrode count does not match "
-                "ForwardModelConfig: "
-                f"{imported_electrodes} != {forward_cfg.total_electrodes()}"
-            )
-        system.setup(mesh=imported_mesh, initialize_inverse=False)
         return
+
+    if forward_cfg.mesh_source == "interop":
+        raise ValueError(
+            "Unmanaged interop geometry is not executable. Register and bind "
+            "the complete Bridge v3 package so ModelContextFactory can restore "
+            "its geometry, electrodes, protocol, fields, and fingerprints."
+        )
 
     system.setup(
         mesh_source="generated",
@@ -1264,22 +1321,45 @@ def _execute_forward_request_unlocked(
         mesh,
         mesh_dimension=forward_cfg.mesh_dimension,
     )
-    sigma = np.full(
-        len(centers),
-        forward_cfg.background_conductivity,
-        dtype=_conductivity_dtype(
-            forward_cfg.background_conductivity,
-            req.inhomogeneities,
-        ),
+    model_context = _bridge_model_context(system)
+    field_override_mode = (
+        _interop_field_override_mode(forward_cfg)
+        if model_context is not None
+        else "drawn"
     )
-    for spec in req.inhomogeneities:
-        _paint_shape(
-            sigma,
-            centers,
-            spec,
-            mesh_dimension=forward_cfg.mesh_dimension,
-            node_coords=node_coords,
-            cell_connectivity=cell_connectivity,
+    if model_context is not None and field_override_mode == "imported":
+        sigma = np.array(model_context.target_local, copy=True)
+        sigma_homog = np.array(model_context.background_local, copy=True)
+    else:
+        if model_context is not None and field_override_mode in {"drawn", "random"}:
+            sigma = np.array(model_context.background_local, copy=True)
+            sigma_homog = np.array(model_context.background_local, copy=True)
+        else:
+            sigma = np.full(
+                len(centers),
+                forward_cfg.background_conductivity,
+                dtype=_conductivity_dtype(
+                    forward_cfg.background_conductivity,
+                    req.inhomogeneities,
+                ),
+            )
+            sigma_homog = np.full_like(
+                sigma,
+                forward_cfg.background_conductivity,
+            )
+        for spec in req.inhomogeneities:
+            _paint_shape(
+                sigma,
+                centers,
+                spec,
+                mesh_dimension=forward_cfg.mesh_dimension,
+                node_coords=node_coords,
+                cell_connectivity=cell_connectivity,
+            )
+    if sigma.shape != (n_cells,) or sigma_homog.shape != (n_cells,):
+        raise ValueError(
+            "Bridge v3 conductivity fields must resolve to exactly one value "
+            f"per local cell ({n_cells})."
         )
     _finish_timing_phase(
         timings_ms,
@@ -1302,7 +1382,6 @@ def _execute_forward_request_unlocked(
 
     emit("Computing homogeneous reference...")
     phase_started = time.perf_counter()
-    sigma_homog = np.full_like(sigma, forward_cfg.background_conductivity)
     data_homog = system.forward_solve(sigma_homog)
     _finish_timing_phase(
         timings_ms,
@@ -1347,7 +1426,19 @@ def _execute_forward_request_unlocked(
             runtime_cache.removed_stale_jit_locks
         ),
         "runtime_diagnostics": runtime_diagnostics,
+        "field_override_mode": field_override_mode,
     }
+    if model_context is not None:
+        forward_model_config.update(
+            {
+                "model_id": model_context.registered.model_id,
+                "forward_fingerprint": (model_context.registered.forward_fingerprint),
+                "protocol_layout_hash": (model_context.registered.protocol_layout_hash),
+                "protocol_physics_hash": (
+                    model_context.registered.protocol_physics_hash
+                ),
+            }
+        )
     _finish_timing_phase(
         timings_ms,
         phase_order,

@@ -8,7 +8,7 @@ from typing import Any
 from eit_app.models.forward_model_config import ForwardModelConfig
 
 
-BRIDGE_PACKAGE_FORMAT_V2 = "eidors_pyeidors_bridge_v2"
+BRIDGE_PACKAGE_FORMAT_V3 = "eidors_pyeidors_bridge_v3"
 
 
 @dataclass
@@ -73,13 +73,19 @@ class InteropCapabilityReport:
 class InteropBridgeManifest:
     """High-level bridge package manifest."""
 
-    exchange_format: str = BRIDGE_PACKAGE_FORMAT_V2
+    exchange_format: str = BRIDGE_PACKAGE_FORMAT_V3
+    schema_version: int = 3
     source_framework: str = "pyeidors"
     package_kind: str = "bridge"
     created_at_utc: str = ""
     environment: dict[str, Any] = field(default_factory=dict)
     capabilities: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    file_integrity: dict[str, dict[str, Any]] = field(default_factory=dict)
+    model_id: str = ""
+    forward_fingerprint: str = ""
+    protocol_layout_hash: str = ""
+    protocol_physics_hash: str = ""
     script_path: str = ""
     script_kind: str = ""
     script_hints: dict[str, Any] = field(default_factory=dict)
@@ -94,13 +100,30 @@ class InteropBridgeManifest:
     ) -> "InteropBridgeManifest":
         raw = dict(mapping or {})
         return cls(
-            exchange_format=str(raw.get("exchange_format", BRIDGE_PACKAGE_FORMAT_V2)),
+            exchange_format=str(raw.get("exchange_format", BRIDGE_PACKAGE_FORMAT_V3)),
+            schema_version=int(raw.get("schema_version", 3)),
             source_framework=str(raw.get("source_framework", "pyeidors")),
             package_kind=str(raw.get("package_kind", "bridge")),
             created_at_utc=str(raw.get("created_at_utc", "")),
             environment=dict(raw.get("environment", {})),
             capabilities=dict(raw.get("capabilities", {})),
-            files=dict(raw.get("files", {})),
+            files={
+                str(role): (
+                    str(entry.get("path", ""))
+                    if isinstance(entry, dict)
+                    else str(entry)
+                )
+                for role, entry in dict(raw.get("files", {})).items()
+            },
+            file_integrity={
+                str(role): dict(entry)
+                for role, entry in dict(raw.get("files", {})).items()
+                if isinstance(entry, dict)
+            },
+            model_id=str(raw.get("model_id", "")),
+            forward_fingerprint=str(raw.get("forward_fingerprint", "")),
+            protocol_layout_hash=str(raw.get("protocol_layout_hash", "")),
+            protocol_physics_hash=str(raw.get("protocol_physics_hash", "")),
             script_path=str(raw.get("script_path", "")),
             script_kind=str(raw.get("script_kind", "")),
             script_hints=dict(raw.get("script_hints", {})),

@@ -33,7 +33,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     transport_type TEXT,
     mea_mode INTEGER,
     notes TEXT,
-    metadata_json TEXT
+    metadata_json TEXT,
+    model_id TEXT,
+    forward_fingerprint TEXT,
+    protocol_layout_hash TEXT,
+    protocol_physics_hash TEXT,
+    channel_mapping_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
@@ -73,12 +78,9 @@ def _to_str(value: Any) -> str | None:
 class FrameDatabase:
     """SQLite wrapper for the EIT frame index."""
 
-    # Schema version 1 = baseline shape.  Bumped to 2 once the
-    # frequency-range columns + frame-driven back-fill have been
-    # applied, so we don't redo the (potentially many-thousand-row)
-    # rebuild on every app start.  Bump again whenever a future
-    # schema migration needs to fire exactly once.
-    _SCHEMA_VERSION = 2
+    # v2 added frequency ranges; v3 adds nullable Bridge v3 model identity.
+    # Historical sessions deliberately remain unbound until explicit proof.
+    _SCHEMA_VERSION = 3
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
@@ -95,10 +97,30 @@ class FrameDatabase:
         current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         if current < 2:
             self._migrate_frequency_range_columns()
-        # Every future migration adds another `if current < N:` branch
-        # before the version bump below.
+        if current < 3:
+            self._migrate_model_binding_columns()
         if current < self._SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
+
+    def _migrate_model_binding_columns(self) -> None:
+        """Add v3 binding fields without guessing identities for old sessions."""
+
+        existing = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        declarations = {
+            "model_id": "TEXT",
+            "forward_fingerprint": "TEXT",
+            "protocol_layout_hash": "TEXT",
+            "protocol_physics_hash": "TEXT",
+            "channel_mapping_json": "TEXT",
+        }
+        for column, declaration in declarations.items():
+            if column not in existing:
+                self._conn.execute(
+                    f"ALTER TABLE sessions ADD COLUMN {column} {declaration}"
+                )
 
     def _migrate_frequency_range_columns(self) -> None:
         """Add ``frequency_hz_min`` / ``_max`` columns and back-fill them.
@@ -284,6 +306,101 @@ class FrameDatabase:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+    def bind_session_model(
+        self,
+        session_id: int,
+        model_id: str,
+        *,
+        registry: Any | None = None,
+        channel_mapping: Any | None = None,
+    ) -> dict[str, Any]:
+        """Validate and atomically bind one session to an immutable v3 model."""
+
+        if registry is None:
+            from pyeidors.interop import ModelRegistry
+
+            registry = ModelRegistry()
+        package = registry.load_package(str(model_id))
+        registered = registry.get(str(model_id))
+        session = self.get_session(int(session_id))
+        if session is None:
+            raise KeyError(f"Unknown frame database session_id: {session_id}")
+
+        model_n_elec = _to_int(
+            package.model.get("n_elec", package.geometry.get("n_elec"))
+        )
+        session_n_elec = _to_int(session.get("n_elec"))
+        if (
+            session_n_elec is not None
+            and model_n_elec is not None
+            and session_n_elec != model_n_elec
+        ):
+            raise ValueError(
+                "Session/model electrode count mismatch: "
+                f"session={session_n_elec}, model={model_n_elec}."
+            )
+
+        metadata: dict[str, Any] = {}
+        if session.get("metadata_json"):
+            try:
+                decoded = json.loads(str(session["metadata_json"]))
+                if isinstance(decoded, dict):
+                    metadata = decoded
+            except (TypeError, ValueError):
+                metadata = {}
+        declared_layout_hash = str(
+            metadata.get("protocol_layout_hash")
+            or session.get("protocol_layout_hash")
+            or ""
+        ).strip()
+        if (
+            declared_layout_hash
+            and declared_layout_hash != registered.protocol_layout_hash
+        ):
+            raise ValueError(
+                "Session/model protocol layout hash mismatch: "
+                f"session={declared_layout_hash}, "
+                f"model={registered.protocol_layout_hash}."
+            )
+
+        if channel_mapping is None:
+            raise ValueError(
+                "Session/model binding requires a proven Bridge v3 channel mapping"
+            )
+        from pyeidors.interop import ProtocolChannelMapping
+
+        restored_mapping = ProtocolChannelMapping.from_mapping(channel_mapping)
+        mapping_json = json.dumps(
+            restored_mapping.to_mapping(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE sessions
+                   SET model_id = ?,
+                       forward_fingerprint = ?,
+                       protocol_layout_hash = ?,
+                       protocol_physics_hash = ?,
+                       channel_mapping_json = ?
+                 WHERE id = ?
+                """,
+                (
+                    registered.model_id,
+                    registered.forward_fingerprint,
+                    registered.protocol_layout_hash,
+                    registered.protocol_physics_hash,
+                    mapping_json,
+                    int(session_id),
+                ),
+            )
+        bound = self.get_session(int(session_id))
+        if bound is None:
+            raise RuntimeError("Bound session disappeared after update")
+        return bound
 
     def query_sessions(
         self,

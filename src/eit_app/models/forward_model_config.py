@@ -261,8 +261,8 @@ class ForwardModelConfig:
         self.mesh_dimension = int(self.mesh_dimension)
         self.potential_order = max(1, int(self.potential_order))
         self.electrode_model = str(self.electrode_model or "cem").strip().lower()
-        if self.electrode_model not in {"cem", "pem"}:
-            raise ValueError("electrode_model must be 'cem' or 'pem'")
+        if self.electrode_model not in {"cem", "pem", "mixed"}:
+            raise ValueError("electrode_model must be 'cem', 'pem', or 'mixed'")
         self.drive_mode = drive_mode_for_mesh_dimension(
             self.drive_mode,
             self.mesh_dimension,

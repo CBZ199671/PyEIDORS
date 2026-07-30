@@ -27,6 +27,7 @@ EXPECTED_SHA256_PER_FILE: dict[str, int] = {
     "inverse/solvers/gauss_newton_linear_system.py": 2,
     "inverse/solvers/gauss_newton_startup_cache.py": 0,
     "inverse/solvers/sparse_bayesian_engine.py": 0,
+    "interop/protocol_mapping.py": 1,
     "io/hdf5_artifacts.py": 2,
     "perf/capabilities.py": 1,
 }

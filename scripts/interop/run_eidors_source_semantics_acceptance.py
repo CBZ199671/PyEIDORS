@@ -111,10 +111,56 @@ def _relative_l2(actual: np.ndarray, reference: np.ndarray) -> float:
     return numerator / denominator
 
 
-def _native_pem_parity(package: Path) -> dict[str, Any]:
+def _export_eidors_jacobian(
+    *,
+    environment: EidorsEnvironment,
+    repo_root: Path,
+    package: Path,
+    output_path: Path,
+) -> np.ndarray:
+    examples_dir = matlab_runtime_path(repo_root / "examples" / "interop", environment)
+    run_script = matlab_runtime_path(package / "run_in_eidors.m", environment)
+    runtime_output = matlab_runtime_path(output_path, environment)
+    escaped_examples_dir = examples_dir.replace("'", "''")
+    escaped_run_script = run_script.replace("'", "''")
+    escaped_runtime_output = runtime_output.replace("'", "''")
+    expression = (
+        f"addpath('{escaped_examples_dir}');"
+        "export_bridge_jacobian_v3("
+        f"'{escaped_run_script}',"
+        f"'{escaped_runtime_output}');"
+    )
+    returncode, stdout, stderr = _run_command_capture(
+        [matlab_command_for_execution(environment), "-batch", expression],
+        timeout=180,
+    )
+    if returncode != 0:
+        raise RuntimeError(
+            stderr.strip()
+            or stdout.strip()
+            or "MATLAB/EIDORS Bridge v3 Jacobian export failed."
+        )
+    payload = _public_mat(output_path)
+    if "jacobian" not in payload:
+        raise RuntimeError("MATLAB/EIDORS Jacobian export did not contain 'jacobian'.")
+    return np.asarray(payload["jacobian"])
+
+
+def _native_pem_parity(
+    package: Path,
+    *,
+    eidors_roundtrip_package: Path,
+    environment: EidorsEnvironment,
+    repo_root: Path,
+    eidors_jacobian_path: Path,
+) -> dict[str, Any]:
     from pyeidors import EITSystem
-    from pyeidors.data import PatternConfig
-    from pyeidors.interop import build_mesh_from_exchange_mat
+    from pyeidors.data import EITImage, PatternConfig
+    from pyeidors.interop import (
+        build_mesh_from_exchange_mat,
+        source_cell_data_to_local,
+    )
+    from pyeidors.inverse.jacobian import EidorsJacobianAdapter
 
     loaded, preview = InteropBundleImporter().preview_package(package)
     config = preview.forward_model_config
@@ -149,8 +195,20 @@ def _native_pem_parity(package: Path) -> dict[str, Any]:
     target = np.asarray(local_geometry["target_elem_data"]).reshape(-1)
     eidors_background = np.asarray(measurements["homogeneous"]).reshape(-1)
     eidors_target = np.asarray(measurements["target"]).reshape(-1)
+    eidors_jacobian_source = _export_eidors_jacobian(
+        environment=environment,
+        repo_root=repo_root,
+        package=eidors_roundtrip_package,
+        output_path=eidors_jacobian_path,
+    )
+    eidors_jacobian = source_cell_data_to_local(
+        mesh,
+        eidors_jacobian_source.T,
+        name="EIDORS Jacobian parameter columns",
+    ).T
 
     pyeidors_measurements: list[tuple[np.ndarray, np.ndarray]] = []
+    pyeidors_jacobian: np.ndarray | None = None
     for contact_impedance in (config.contact_impedance, np.full(config.n_elec, 1e9)):
         system = EITSystem(
             n_elec=config.total_electrodes(),
@@ -164,6 +222,16 @@ def _native_pem_parity(package: Path) -> dict[str, Any]:
             potential_order=1,
         )
         system.setup(mesh=mesh, initialize_inverse=False)
+        if pyeidors_jacobian is None:
+            background_image = EITImage(
+                elem_data=background,
+                fwd_model=system.fwd_model,
+            )
+            pyeidors_jacobian = EidorsJacobianAdapter(
+                system.fwd_model,
+                use_torch=False,
+                device="cpu",
+            ).calculate_from_image(background_image)
         pyeidors_measurements.append(
             (
                 np.asarray(system.forward_solve(background).meas).reshape(-1),
@@ -173,6 +241,13 @@ def _native_pem_parity(package: Path) -> dict[str, Any]:
 
     py_background, py_target = pyeidors_measurements[0]
     alternate_background, alternate_target = pyeidors_measurements[1]
+    if pyeidors_jacobian is None:
+        raise RuntimeError("PyEIDORS Jacobian was not calculated.")
+    if pyeidors_jacobian.shape != eidors_jacobian.shape:
+        raise RuntimeError(
+            "EIDORS/PyEIDORS Jacobian shape mismatch: "
+            f"{eidors_jacobian.shape} != {pyeidors_jacobian.shape}"
+        )
     return {
         "background_relative_l2": _relative_l2(
             py_background,
@@ -185,6 +260,13 @@ def _native_pem_parity(package: Path) -> dict[str, Any]:
         "z_contact_target_max_abs": float(
             np.max(np.abs(py_target - alternate_target), initial=0.0)
         ),
+        "jacobian_relative_l2": _relative_l2(
+            pyeidors_jacobian,
+            eidors_jacobian,
+        ),
+        "jacobian_shape": [int(value) for value in pyeidors_jacobian.shape],
+        "jacobian_parameter_space": "source_p1_element_conductivity",
+        "jacobian_sign_convention": "eidors_canonical_minus_dv_dsigma",
         "n_measurements": int(py_background.size),
         "electrode_model": config.electrode_model,
         "electrode_projection": config.interop_semantics["electrode_projection"],
@@ -269,6 +351,7 @@ def main() -> int:
         "cem_surface": output_root / "cem_surface",
         "pem_current_density": output_root / "pem_current_density",
         "pem_roundtrip_export": output_root / "pem_roundtrip_export",
+        "pem_jacobian": output_root / "pem_jacobian.mat",
         "missing_fields": output_root / "missing_fields",
         "ambiguous_auto": output_root / "ambiguous_auto",
         "explicit_selector": output_root / "explicit_selector",
@@ -354,7 +437,13 @@ def main() -> int:
     )
 
     pem = geometries["pem_current_density"]
-    pem_parity = _native_pem_parity(case_paths["pem_current_density"])
+    pem_parity = _native_pem_parity(
+        case_paths["pem_current_density"],
+        eidors_roundtrip_package=pem_roundtrip_path,
+        environment=environment,
+        repo_root=repo_root,
+        eidors_jacobian_path=case_paths["pem_jacobian"],
+    )
     missing = geometries["missing_fields"]
     pem_raw = np.asarray(pem["stim_matrix_raw"], dtype=float)
     pem_effective = np.asarray(pem["stim_matrix"], dtype=float)
@@ -422,6 +511,9 @@ def main() -> int:
             pem_parity["background_relative_l2"] <= 5e-4
         ),
         "pem_native_eidors_target_parity": (pem_parity["target_relative_l2"] <= 5e-4),
+        "pem_native_eidors_jacobian_parity": (
+            pem_parity["jacobian_relative_l2"] <= 5e-3
+        ),
         "pem_z_contact_is_nonphysical": (
             pem_parity["z_contact_background_max_abs"] == 0.0
             and pem_parity["z_contact_target_max_abs"] == 0.0

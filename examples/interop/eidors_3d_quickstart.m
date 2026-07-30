@@ -1,4 +1,4 @@
-%% Ordinary EIDORS 3D surface-electrode model for Bridge Package v2 capture
+%% Ordinary EIDORS 3D surface-electrode model for Bridge Package v3 capture
 [fmdl, ~] = ng_mk_cyl_models([1.0, 1.0, 0.35], [8, 0.5], [0.12]);
 fmdl.name = 'EIDORS 3D surface-electrode quickstart';
 fmdl.stimulation = mk_stim_patterns( ...

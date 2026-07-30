@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a native PyEIDORS 3D model as Bridge Package v2."""
+"""Export a native PyEIDORS 3D model as Bridge Package v3."""
 
 from __future__ import annotations
 

@@ -11,13 +11,15 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
 from eit_app.controllers.forward_solver_controller import (
-    _contact_impedance_vector,
+    _bridge_model_context,
+    _create_forward_system,
     _forward_mesh_geometry_arrays,
     _forward_measurement_values,
+    _interop_field_override_mode,
     _paint_shape,
+    _pattern_and_electrode_count,
     _resolve_forward_runtime,
     _setup_generated_forward_system,
-    _total_electrode_count,
 )
 from eit_app.io.hdf5_packages import (
     write_dataset_mesh_info_package,
@@ -55,10 +57,6 @@ class _DatasetGeneratorWorker(QObject):
         total = cfg.n_samples
 
         try:
-            from pyeidors import EITSystem
-            from pyeidors.data.structures import PatternConfig
-            from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
-
             forward_cfg = ForwardModelConfig.from_mapping(
                 self._request.forward_model_config
                 or {
@@ -69,64 +67,14 @@ class _DatasetGeneratorWorker(QObject):
                 }
             )
             forward_cfg.require_interop_forward_ready()
-            total_electrodes = _total_electrode_count(forward_cfg)
-            pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
-                mesh_tdim=forward_cfg.mesh_dimension,
-                n_elec=forward_cfg.n_elec,
-                n_rings=forward_cfg.n_rings,
-                electrode_layout=forward_cfg.electrode_layout,
-            )
-            pattern = PatternConfig(
-                n_elec=pattern_n_elec,
-                n_rings=pattern_n_rings,
-                stim_pattern=forward_cfg.stim_pattern,
-                meas_pattern=forward_cfg.meas_pattern,
-                electrode_layout=forward_cfg.electrode_layout,
-                measurement_protocol=forward_cfg.measurement_protocol,
-                custom_stim_matrix=forward_cfg.custom_stim_matrix,
-                custom_meas_matrices=forward_cfg.custom_meas_matrices,
-                drive_mode=forward_cfg.drive_mode,
-                drive_value=forward_cfg.drive_value,
-                geometry_scale_to_m=forward_cfg.geometry_scale_to_m,
-                electrode_length_m_override=forward_cfg.electrode_length_m_override,
-                use_meas_current=forward_cfg.use_meas_current,
-                use_meas_current_next=forward_cfg.use_meas_current_next,
-                rotate_meas=forward_cfg.rotate_meas,
-                stim_direction=forward_cfg.stim_direction,
-                meas_direction=forward_cfg.meas_direction,
-                stim_first_positive=forward_cfg.stim_first_positive,
-            )
+            pattern, total_electrodes = _pattern_and_electrode_count(forward_cfg)
             runtime = _resolve_forward_runtime(forward_cfg)
-            system = EITSystem(
-                n_elec=total_electrodes,
-                pattern_config=pattern,
-                contact_impedance=(
-                    None
-                    if forward_cfg.electrode_model == "pem"
-                    and forward_cfg.contact_impedance is None
-                    else _contact_impedance_vector(
-                        forward_cfg.contact_impedance,
-                        total_electrodes=total_electrodes,
-                    )
-                ),
-                electrode_model=forward_cfg.electrode_model,
-                base_conductivity=forward_cfg.background_conductivity,
-                solver_mode=runtime["solver_mode"],
-                line_search_mode=runtime["line_search_mode"],
-                linear_solver=runtime["linear_solver"],
-                preconditioner=runtime["preconditioner"],
-                fast_linear_path=runtime["fast_linear_path"],
-                linear_backend_config={
-                    "solver_preset": runtime["forward_solver_preset"],
-                    "mat_solve_mode": runtime["forward_mat_solve"],
-                    "petsc_device": runtime["petsc_device"],
-                },
-                petsc_device=runtime["petsc_device"],
-                device=runtime["device"],
-                forward_backend=runtime["forward_backend"],
-                mesh_family=runtime["mesh_family"],
-                potential_order=forward_cfg.potential_order,
-                acceleration_profile=runtime["acceleration_profile"],
+            system = _create_forward_system(
+                forward_cfg=forward_cfg,
+                runtime=runtime,
+                pattern=pattern,
+                total_electrodes=total_electrodes,
+                flow="dataset",
             )
             _setup_generated_forward_system(
                 system,
@@ -141,8 +89,29 @@ class _DatasetGeneratorWorker(QObject):
                     mesh_dimension=cfg.mesh_dimension,
                 )
             )
-            # Compute homogeneous reference once
-            sigma_homog = np.ones(n_elements, dtype=np.float64)
+            model_context = _bridge_model_context(system)
+            field_override_mode = (
+                _interop_field_override_mode(forward_cfg)
+                if model_context is not None
+                else "random"
+            )
+            use_imported_fields = (
+                model_context is not None and field_override_mode == "imported"
+            )
+            if model_context is not None and field_override_mode in {
+                "imported",
+                "drawn",
+                "random",
+            }:
+                sigma_homog = np.array(
+                    model_context.background_local,
+                    copy=True,
+                )
+            else:
+                sigma_homog = np.full(
+                    n_elements,
+                    forward_cfg.background_conductivity,
+                )
             data_homog = system.forward_solve(sigma_homog)
             homog_voltages = _forward_measurement_values(data_homog.meas)
 
@@ -157,7 +126,10 @@ class _DatasetGeneratorWorker(QObject):
                 cell_connectivity=cell_connectivity,
                 n_electrodes=forward_cfg.n_elec,
                 homogeneous_voltages=homog_voltages,
-                forward_model_config=forward_cfg.to_mapping(),
+                forward_model_config={
+                    **forward_cfg.to_mapping(),
+                    "field_override_mode": field_override_mode,
+                },
                 total_electrodes=total_electrodes,
             )
 
@@ -169,18 +141,20 @@ class _DatasetGeneratorWorker(QObject):
                     log.info("Dataset generation cancelled at sample %d/%d", i, total)
                     break
 
-                # Random background conductivity
-                bg = rng.uniform(
-                    cfg.background_conductivity_min,
-                    cfg.background_conductivity_max,
-                )
-                sigma = np.full(n_elements, bg, dtype=np.float64)
-
-                # Random number of inhomogeneities
-                n_inhom = rng.integers(
-                    cfg.n_inhomogeneities_min,
-                    cfg.n_inhomogeneities_max + 1,
-                )
+                if use_imported_fields:
+                    bg = np.array(model_context.background_local, copy=True)
+                    sigma = np.array(model_context.target_local, copy=True)
+                    n_inhom = 0
+                else:
+                    bg = rng.uniform(
+                        cfg.background_conductivity_min,
+                        cfg.background_conductivity_max,
+                    )
+                    sigma = np.full(n_elements, bg, dtype=np.float64)
+                    n_inhom = rng.integers(
+                        cfg.n_inhomogeneities_min,
+                        cfg.n_inhomogeneities_max + 1,
+                    )
 
                 specs = []
                 for _ in range(n_inhom):

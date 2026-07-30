@@ -8,7 +8,7 @@ from .bridge_package import (
 )
 from .environment import EidorsEnvironmentDetector, InteropSettingsStore
 from .models import (
-    BRIDGE_PACKAGE_FORMAT_V2,
+    BRIDGE_PACKAGE_FORMAT_V3,
     EidorsEnvironment,
     EidorsExportJob,
     EidorsImportPreview,
@@ -28,7 +28,7 @@ from .services import (
 )
 
 __all__ = [
-    "BRIDGE_PACKAGE_FORMAT_V2",
+    "BRIDGE_PACKAGE_FORMAT_V3",
     "BRIDGE_RUNTIME_NAME",
     "EidorsBridgeRunner",
     "EidorsEnvironment",

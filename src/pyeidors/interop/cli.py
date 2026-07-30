@@ -19,8 +19,11 @@ def _emit(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
 
 
 def _geometry_path(path: Path) -> tuple[Path, Any | None]:
-    if path.is_file() and path.suffix.lower() == ".mat":
-        return path, None
+    if path.is_file():
+        raise ValueError(
+            "Bridge v3 requires a package directory; standalone MAT and "
+            "Bridge v1/v2 inputs are unsupported."
+        )
     from eit_app.interop import InteropBundleImporter
 
     importer = InteropBundleImporter()
@@ -129,11 +132,25 @@ def _cmd_import_geometry(args: argparse.Namespace) -> int:
                 .preview_loaded_package(loaded)
                 .forward_model_config
             )
-        if args.allow_point_electrode_projection:
-            config = config.with_overrides(allow_interop_approximations=True)
         report.update(_forward_smoke(mesh, config))
     _emit(report)
     return 0
+
+
+def _cmd_register(args: argparse.Namespace) -> int:
+    from pyeidors.interop import ModelRegistry
+
+    registered = ModelRegistry(args.registry_dir).register(
+        args.path,
+        display_name=args.name or None,
+    )
+    _emit(registered.to_mapping())
+    return 0
+
+
+def _cmd_verify_numerics(args: argparse.Namespace) -> int:
+    args.forward_smoke = True
+    return _cmd_import_geometry(args)
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
@@ -175,13 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pyeidors-interop",
         description=(
             "Capture, validate, inspect, and import EIDORS/PyEIDORS "
-            "Bridge Package v2 models."
+            "Bridge Package v3 models."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for name, help_text, handler in (
-        ("validate", "Validate a Bridge Package or geometry MAT.", _cmd_validate),
+        ("validate", "Validate a Bridge Package v3 directory.", _cmd_validate),
         ("inspect", "Print a deterministic package/model summary.", _cmd_inspect),
     ):
         subparser = subparsers.add_parser(name, help=help_text)
@@ -192,28 +209,39 @@ def build_parser() -> argparse.ArgumentParser:
         "import-geometry",
         help="Build the exact 2D/3D DOLFINx EITMesh.",
     )
-    import_parser.add_argument("path", help="Bridge directory or geometry.mat path")
+    import_parser.add_argument("path", help="Bridge v3 package directory")
     import_parser.add_argument(
         "--forward-smoke",
         action="store_true",
         help="Also run one homogeneous forward solve on the imported mesh.",
     )
-    import_parser.add_argument(
-        "--allow-point-electrode-projection",
-        action="store_true",
-        help=(
-            "Backward-compatible flag that explicitly accepts only the "
-            "distributed-point to incident-boundary-facet approximation. "
-            "Single-node PEM runs natively and does not require this flag."
-        ),
-    )
     import_parser.set_defaults(handler=_cmd_import_geometry)
+
+    register_parser = subparsers.add_parser(
+        "register",
+        help="Validate and atomically register a managed Bridge v3 model.",
+    )
+    register_parser.add_argument("path", help="Bridge v3 package directory")
+    register_parser.add_argument("--name", default="", help="Display name")
+    register_parser.add_argument(
+        "--registry-dir",
+        default=None,
+        help="Optional managed registry root",
+    )
+    register_parser.set_defaults(handler=_cmd_register)
+
+    verify_parser = subparsers.add_parser(
+        "verify-numerics",
+        help="Validate, import, and run one exact-background forward smoke solve.",
+    )
+    verify_parser.add_argument("path", help="Bridge v3 package directory")
+    verify_parser.set_defaults(handler=_cmd_verify_numerics)
 
     capture_parser = subparsers.add_parser(
         "capture",
         help=(
             "Run an EIDORS script and capture its discoverable standard "
-            "objects into Bridge Package v2."
+            "objects into Bridge Package v3."
         ),
     )
     capture_parser.add_argument("script", help="EIDORS .m script to run")

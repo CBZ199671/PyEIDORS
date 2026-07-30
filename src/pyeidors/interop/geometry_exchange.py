@@ -11,12 +11,13 @@ from scipy.io import loadmat, savemat
 
 from pyeidors.femx import build_eit_mesh
 
+from .bridge_v3 import ElectrodeSpec
+
 LEGACY_INTEROP_FORMAT = "eidors_pyeidors_bridge_v1"
 STANDARD_INTEROP_FORMAT_V2 = "eidors_pyeidors_geometry_v2"
-STANDARD_INTEROP_FORMAT = STANDARD_INTEROP_FORMAT_V2
-SUPPORTED_INTEROP_FORMATS = frozenset(
-    {LEGACY_INTEROP_FORMAT, STANDARD_INTEROP_FORMAT_V2}
-)
+STANDARD_INTEROP_FORMAT_V3 = "eidors_pyeidors_geometry_v3"
+STANDARD_INTEROP_FORMAT = STANDARD_INTEROP_FORMAT_V3
+SUPPORTED_INTEROP_FORMATS = frozenset({STANDARD_INTEROP_FORMAT_V3})
 
 REQUIRED_EXCHANGE_FIELDS = {
     "exchange_format",
@@ -35,7 +36,7 @@ REQUIRED_EXCHANGE_FIELDS = {
     "scenario_name",
 }
 
-REQUIRED_V2_EXCHANGE_FIELDS = {
+REQUIRED_V3_EXCHANGE_FIELDS = {
     "schema_version",
     "index_base",
     "dimension",
@@ -108,6 +109,20 @@ def _infer_electrode_tags(mesh) -> list[int]:
 
 def build_electrode_arrays(mesh) -> tuple[np.ndarray, np.ndarray]:
     """Collect padded electrode node ids from a marked DOLFINx PyEIDORS mesh."""
+    electrode_specs = tuple(getattr(mesh, "electrode_specs", ()) or ())
+    if electrode_specs:
+        node_lists = [
+            np.asarray(spec.source_nodes, dtype=np.int64) + int(spec.index_base == 0)
+            for spec in electrode_specs
+        ]
+        counts = np.asarray([nodes.size for nodes in node_lists], dtype=np.int64)
+        padded = np.zeros(
+            (len(node_lists), int(np.max(counts, initial=0))),
+            dtype=np.int64,
+        )
+        for index, nodes in enumerate(node_lists):
+            padded[index, : nodes.size] = nodes
+        return padded, counts
     if str(getattr(mesh, "electrode_model", "")).strip().lower() == "pem":
         source_nodes = np.asarray(
             getattr(mesh, "point_electrode_source_nodes", []),
@@ -257,7 +272,7 @@ def _string_vector(
     if field not in payload:
         return None
     raw = np.asarray(payload[field], dtype=object).reshape(-1)
-    values = [str(np.asarray(value).reshape(-1)[0]) for value in raw]
+    values = [str(np.asarray(value).reshape(-1)[0]).strip().lower() for value in raw]
     if len(values) != size:
         raise ValueError(f"'{field}' must have one entry per electrode")
     return values
@@ -357,17 +372,17 @@ def validate_exchange_payload(payload: dict[str, Any]) -> None:
             f"Unsupported exchange format {exchange_format!r}; expected one of "
             f"{sorted(SUPPORTED_INTEROP_FORMATS)!r}"
         )
-    if exchange_format == STANDARD_INTEROP_FORMAT_V2:
-        missing_v2 = sorted(REQUIRED_V2_EXCHANGE_FIELDS.difference(payload))
-        if missing_v2:
+    if exchange_format == STANDARD_INTEROP_FORMAT_V3:
+        missing_v3 = sorted(REQUIRED_V3_EXCHANGE_FIELDS.difference(payload))
+        if missing_v3:
             raise ValueError(
-                "Geometry v2 payload is missing required fields: "
-                + ", ".join(missing_v2)
+                "Geometry v3 payload is missing required fields: "
+                + ", ".join(missing_v3)
             )
-        if _scalar_int(payload["schema_version"], "schema_version") != 2:
-            raise ValueError("'schema_version' must be 2 for Geometry v2")
+        if _scalar_int(payload["schema_version"], "schema_version") != 3:
+            raise ValueError("'schema_version' must be 3 for Geometry v3")
         if _scalar_int(payload["index_base"], "index_base") != 1:
-            raise ValueError("'index_base' must be 1 for Geometry v2")
+            raise ValueError("'index_base' must be 1 for Geometry v3")
 
     nodes = np.asarray(payload["nodes"])
     if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] not in {2, 3}:
@@ -523,6 +538,7 @@ def validate_exchange_payload(payload: dict[str, Any]) -> None:
             raise ValueError(
                 "'electrode_model' contains unsupported values: " + ", ".join(unknown)
             )
+    electrode_specs_from_exchange_payload(payload)
 
 
 def source_electrode_models(payload: dict[str, Any]) -> list[str]:
@@ -571,6 +587,191 @@ def source_electrode_models(payload: dict[str, Any]) -> list[str]:
         )
         models.append("cem" if has_complete_boundary_facet else "distributed_point")
     return models
+
+
+def electrode_specs_from_exchange_payload(
+    payload: dict[str, Any],
+) -> tuple[ElectrodeSpec, ...]:
+    """Build exact ordered CEM/weighted-PEM specs from a v3 geometry payload."""
+
+    n_elec = _scalar_int(payload["n_elec"], "n_elec")
+    node_lists = _load_standard_electrode_node_lists(payload)
+    if node_lists is None or len(node_lists) != n_elec:
+        raise ValueError("Bridge v3 requires one electrode node list per electrode")
+    source_models = source_electrode_models(payload)
+    kinds = [
+        "pem" if model in {"point", "distributed_point"} else "cem"
+        for model in source_models
+    ]
+    boundary_kinds = _string_vector(
+        payload,
+        "electrode_boundary_kind",
+        size=n_elec,
+    )
+    if boundary_kinds is None:
+        boundary_kinds = ["none" if kind == "pem" else "exterior" for kind in kinds]
+
+    impedance = np.asarray(payload["contact_impedance"]).reshape(-1)
+    if impedance.size == 1:
+        impedance = np.full(n_elec, impedance[0], dtype=impedance.dtype)
+    impedance_present = _presence_vector(
+        payload,
+        "contact_impedance_present",
+        size=n_elec,
+        default=True,
+    )
+
+    padded_weights = None
+    for field in ("pem_node_weights", "electrode_node_weights"):
+        if field in payload:
+            raw = np.asarray(payload[field])
+            if raw.ndim == 1 and n_elec == 1:
+                raw = raw.reshape(1, -1)
+            elif raw.ndim == 1 and raw.size % n_elec == 0:
+                raw = raw.reshape(n_elec, -1)
+            if raw.ndim != 2:
+                raise ValueError(f"'{field}' must be a padded two-dimensional array")
+            if raw.shape[0] != n_elec and raw.shape[1] == n_elec:
+                raw = raw.T
+            if raw.shape[0] != n_elec:
+                raise ValueError(f"'{field}' must have one row per electrode")
+            padded_weights = raw
+            break
+
+    n2e = None
+    for field in ("N2E", "n2e"):
+        if field in payload:
+            raw = payload[field]
+            if hasattr(raw, "toarray"):
+                raw = raw.toarray()
+            n2e = np.asarray(raw)
+            if n2e.ndim == 1:
+                n2e = n2e.reshape(n_elec, -1)
+            if n2e.ndim != 2:
+                raise ValueError("'N2E' must be a two-dimensional operator")
+            n_nodes = len(np.asarray(payload["nodes"]))
+            if n2e.shape[0] != n_elec and n2e.shape[1] == n_elec:
+                n2e = n2e.T
+            if n2e.shape[0] != n_elec or n2e.shape[1] < n_nodes:
+                raise ValueError(
+                    "'N2E' must have shape (n_elec, n_system_unknowns) with "
+                    "n_system_unknowns >= n_nodes"
+                )
+            break
+
+    dimension = _scalar_int(
+        payload.get("dimension", np.asarray(payload["nodes"]).shape[1]),
+        "dimension",
+    )
+    boundary_field = (
+        "boundary_facets" if "boundary_facets" in payload else "boundary_edges"
+    )
+    exterior_faces = _connectivity_array(
+        payload,
+        boundary_field,
+        width=dimension,
+        n_nodes=len(np.asarray(payload["nodes"])),
+    )
+    explicit_faces: list[list[tuple[int, ...]]] = [[] for _ in range(n_elec)]
+    if "cem_face_nodes" in payload and np.asarray(payload["cem_face_nodes"]).size:
+        face_nodes = np.asarray(payload["cem_face_nodes"], dtype=np.int64)
+        if face_nodes.ndim == 1:
+            face_nodes = face_nodes.reshape(1, -1)
+        face_counts = np.asarray(
+            payload.get(
+                "cem_face_node_counts",
+                np.full(face_nodes.shape[0], dimension),
+            ),
+            dtype=np.int64,
+        ).reshape(-1)
+        face_electrodes = np.asarray(
+            payload.get("cem_face_electrode", []),
+            dtype=np.int64,
+        ).reshape(-1)
+        if (
+            face_nodes.ndim != 2
+            or face_counts.size != face_nodes.shape[0]
+            or face_electrodes.size != face_nodes.shape[0]
+        ):
+            raise ValueError(
+                "CEM face arrays require one count and electrode id per face"
+            )
+        for row, count, electrode_id in zip(
+            face_nodes,
+            face_counts,
+            face_electrodes,
+            strict=True,
+        ):
+            electrode_index = int(electrode_id) - 1
+            if electrode_index < 0 or electrode_index >= n_elec:
+                raise ValueError("'cem_face_electrode' contains an invalid id")
+            active = tuple(int(value) - 1 for value in row[: int(count)])
+            if len(active) != dimension or min(active, default=-1) < 0:
+                raise ValueError("CEM face nodes must use valid one-based ids")
+            explicit_faces[electrode_index].append(active)
+
+    specs: list[ElectrodeSpec] = []
+    for index, (kind, nodes, boundary_kind) in enumerate(
+        zip(kinds, node_lists, boundary_kinds, strict=True)
+    ):
+        source_nodes = tuple(int(value) for value in nodes)
+        contact_value = impedance[index] if impedance.size else None
+        if kind == "pem":
+            if padded_weights is not None:
+                weights = tuple(
+                    value.item() if isinstance(value, np.generic) else value
+                    for value in padded_weights[index, : len(source_nodes)]
+                )
+            elif n2e is not None:
+                weights = tuple(n2e[index, np.asarray(source_nodes, dtype=np.int64)])
+            elif len(source_nodes) == 1:
+                weights = (1.0,)
+            else:
+                raise ValueError(
+                    f"Weighted PEM electrode {index + 1} requires N2E or "
+                    "pem_node_weights; facet projection is unsupported"
+                )
+            specs.append(
+                ElectrodeSpec(
+                    kind="pem",
+                    index_base=0,
+                    source_nodes=source_nodes,
+                    node_weights=weights,
+                    boundary_kind="none",
+                    contact_impedance=(
+                        contact_value if bool(impedance_present[index]) else None
+                    ),
+                    contact_impedance_present=bool(impedance_present[index]),
+                    contact_impedance_applicable=False,
+                )
+            )
+            continue
+
+        faces = explicit_faces[index]
+        if not faces and boundary_kind == "exterior":
+            node_set = set(source_nodes)
+            faces = [
+                tuple(int(value) - 1 for value in face)
+                for face in exterior_faces
+                if set(int(value) - 1 for value in face).issubset(node_set)
+            ]
+        if not faces:
+            raise ValueError(f"CEM electrode {index + 1} has no exact faces")
+        specs.append(
+            ElectrodeSpec(
+                kind="cem",
+                index_base=0,
+                source_nodes=source_nodes,
+                source_faces=tuple(faces),
+                boundary_kind=boundary_kind,
+                contact_impedance=(
+                    contact_value if bool(impedance_present[index]) else None
+                ),
+                contact_impedance_present=bool(impedance_present[index]),
+                contact_impedance_applicable=True,
+            )
+        )
+    return tuple(specs)
 
 
 def save_exchange_mat(path: Path, payload: dict[str, Any]) -> None:
@@ -673,6 +874,7 @@ def _standard_facet_tags(
     boundary_facets: np.ndarray,
     electrode_node_lists: list[np.ndarray],
     electrode_models: list[str] | None = None,
+    electrode_specs: tuple[ElectrodeSpec, ...] | None = None,
 ):
     from dolfinx import mesh as dmesh
 
@@ -736,85 +938,46 @@ def _standard_facet_tags(
             "Exchange payload boundary facets do not match the generated DOLFINx mesh facets"
         )
 
-    if electrode_models is None:
-        point_electrodes = {
+    if electrode_specs is not None:
+        pem_electrodes = {
+            index for index, spec in enumerate(electrode_specs) if spec.kind == "pem"
+        }
+        exterior_cem_electrodes = {
             index
-            for index, node_set in enumerate(electrode_sets)
-            if len(node_set) < int(mesh.topology.dim)
+            for index, spec in enumerate(electrode_specs)
+            if spec.kind == "cem" and spec.boundary_kind == "exterior"
         }
     else:
-        point_electrodes = {
+        pem_electrodes = {
             index
-            for index, model in enumerate(electrode_models)
+            for index, model in enumerate(electrode_models or ())
             if model in {"point", "distributed_point"}
         }
-    native_pem = bool(
-        electrode_models
-        and len(electrode_models) == len(electrode_sets)
-        and all(model == "point" for model in electrode_models)
-        and all(len(node_set) == 1 for node_set in electrode_sets)
-    )
+        exterior_cem_electrodes = set(range(len(electrode_sets))).difference(
+            pem_electrodes
+        )
     markers: dict[int, int] = {}
     marker_counts = np.zeros(len(electrode_sets), dtype=np.int64)
     for facet_idx, source_vertices in boundary_records:
         vertex_set = set(source_vertices)
         for elec_idx, node_set in enumerate(electrode_sets, start=1):
-            if elec_idx - 1 not in point_electrodes and vertex_set.issubset(node_set):
+            if elec_idx - 1 in exterior_cem_electrodes and vertex_set.issubset(
+                node_set
+            ):
                 markers[facet_idx] = elec_idx + 1
                 marker_counts[elec_idx - 1] += 1
                 break
 
-    if not native_pem:
-        for point_index in sorted(point_electrodes):
-            node_set = electrode_sets[point_index]
-            candidates = [
-                facet_idx
-                for facet_idx, source_vertices in boundary_records
-                if node_set.intersection(source_vertices)
-            ]
-            if not candidates:
-                raise ValueError(
-                    f"Point electrode {point_index + 1} is not on a boundary facet"
-                )
-            selected = next(
-                (facet_idx for facet_idx in candidates if facet_idx not in markers),
-                None,
-            )
-            if selected is None:
-                raise ValueError(
-                    "Unable to assign a unique incident boundary facet to point "
-                    f"electrode {point_index + 1}"
-                )
-            markers[selected] = point_index + 2
-            marker_counts[point_index] += 1
-
-    for facet_idx, source_vertices in boundary_records:
+    for facet_idx, _source_vertices in boundary_records:
         if facet_idx in markers:
             continue
-        if native_pem:
-            markers[facet_idx] = gap_tag
-            continue
-        point_candidates = [
-            point_index
-            for point_index in sorted(point_electrodes)
-            if electrode_sets[point_index].intersection(source_vertices)
-        ]
-        if point_candidates:
-            selected = min(point_candidates, key=lambda item: marker_counts[item])
-            markers[facet_idx] = selected + 2
-            marker_counts[selected] += 1
-        else:
-            markers[facet_idx] = gap_tag
+        markers[facet_idx] = gap_tag
 
-    missing_electrodes = (
-        []
-        if native_pem
-        else [
-            str(index + 1)
-            for index, count in enumerate(marker_counts)
-            if int(count) <= 0
-        ]
-    )
+    missing_electrodes = [
+        str(index + 1)
+        for index in sorted(exterior_cem_electrodes)
+        if int(marker_counts[index]) <= 0
+    ]
     if missing_electrodes:
         raise ValueError(
             "Imported electrode definitions have no positive boundary facets: "
@@ -842,10 +1005,86 @@ def _standard_facet_tags(
     )
     projection = (
         "none"
-        if native_pem
-        else ("incident_boundary_facets" if point_electrodes else "exact_surface_nodes")
+        if pem_electrodes and not exterior_cem_electrodes
+        else (
+            "exact_weighted_nodes_and_faces"
+            if pem_electrodes
+            else "exact_surface_nodes"
+        )
     )
     return facet_tags, cell_tags, association_table, projection
+
+
+def _build_interior_cem_facet_tags(
+    mesh,
+    electrode_specs: tuple[ElectrodeSpec, ...],
+):
+    from dolfinx import mesh as dmesh
+
+    desired: dict[tuple[int, ...], int] = {}
+    for electrode_index, spec in enumerate(electrode_specs):
+        if spec.kind != "cem" or spec.boundary_kind != "interior":
+            continue
+        for face in spec.source_faces:
+            key = tuple(sorted(int(value) for value in face))
+            if key in desired:
+                raise ValueError("An interior CEM face belongs to multiple electrodes")
+            desired[key] = electrode_index + 2
+    if not desired:
+        return None
+
+    tdim = int(mesh.topology.dim)
+    fdim = tdim - 1
+    mesh.topology.create_entities(fdim)
+    mesh.topology.create_connectivity(fdim, 0)
+    mesh.topology.create_connectivity(fdim, tdim)
+    facet_to_vertex = mesh.topology.connectivity(fdim, 0)
+    facet_to_cell = mesh.topology.connectivity(fdim, tdim)
+    facet_map = mesh.topology.index_map(fdim)
+    vertex_map = mesh.topology.index_map(0)
+    if (
+        facet_to_vertex is None
+        or facet_to_cell is None
+        or facet_map is None
+        or vertex_map is None
+    ):
+        raise ValueError("Unable to create interior CEM facet connectivity")
+    local_to_source = np.asarray(
+        mesh.geometry.input_global_indices,
+        dtype=np.int64,
+    ).reshape(-1)
+    n_vertices = int(vertex_map.size_local + vertex_map.num_ghosts)
+    local_to_source = local_to_source[:n_vertices]
+    indices: list[int] = []
+    values: list[int] = []
+    found: set[tuple[int, ...]] = set()
+    for facet_index in range(int(facet_map.size_local)):
+        local_vertices = np.asarray(
+            facet_to_vertex.links(facet_index),
+            dtype=np.int64,
+        )
+        source_face = tuple(
+            sorted(int(value) for value in local_to_source[local_vertices])
+        )
+        if source_face not in desired:
+            continue
+        if len(facet_to_cell.links(facet_index)) != 2:
+            raise ValueError(
+                f"Declared interior CEM face {source_face} is not an interior facet"
+            )
+        indices.append(facet_index)
+        values.append(desired[source_face])
+        found.add(source_face)
+    missing = sorted(set(desired).difference(found))
+    if missing:
+        raise ValueError(f"Interior CEM faces are absent from the mesh: {missing}")
+    order = np.argsort(np.asarray(indices, dtype=np.int64))
+    return dmesh.meshtags(
+        mesh,
+        fdim,
+        np.asarray(indices, dtype=np.int32)[order],
+        np.asarray(values, dtype=np.int32)[order],
+    )
 
 
 def build_mesh_from_exchange_mat(path: Path):
@@ -882,6 +1121,7 @@ def build_mesh_from_exchange_mat(path: Path):
             f"but contains {len(standard_electrodes)} electrode node lists"
         )
     electrode_models = source_electrode_models(payload)
+    electrode_specs = electrode_specs_from_exchange_payload(payload)
 
     dolfinx_mesh = _create_dolfinx_simplex_mesh(
         nodes,
@@ -894,7 +1134,12 @@ def build_mesh_from_exchange_mat(path: Path):
             boundary_facets,
             standard_electrodes,
             electrode_models,
+            electrode_specs,
         )
+    )
+    interior_facet_tags = _build_interior_cem_facet_tags(
+        dolfinx_mesh,
+        electrode_specs,
     )
     center = np.mean(nodes, axis=0)
     mesh = build_eit_mesh(
@@ -908,12 +1153,8 @@ def build_mesh_from_exchange_mat(path: Path):
             nodes[np.asarray(ids, dtype=np.int64)] for ids in standard_electrodes
         ],
         mesh_family=cell_type,
-        geometry_version=(
-            "interop-v2"
-            if _scalar_text(payload["exchange_format"]) == STANDARD_INTEROP_FORMAT_V2
-            else "interop-v1"
-        ),
-        generator_revision="interop-v2",
+        geometry_version="interop-v3",
+        generator_revision="interop-v3",
     )
     if "mesh_name" in payload:
         mesh.mesh_name = str(np.asarray(payload["mesh_name"]).reshape(-1)[0])
@@ -923,6 +1164,8 @@ def build_mesh_from_exchange_mat(path: Path):
     mesh.n_electrodes = n_elec
     mesh.electrode_projection = electrode_projection
     mesh.source_electrode_models = electrode_models
+    mesh.electrode_specs = electrode_specs
+    mesh.interior_facet_tags = interior_facet_tags
     original_cell_index = np.asarray(
         dolfinx_mesh.topology.original_cell_index,
         dtype=np.int64,
@@ -948,18 +1191,17 @@ def build_mesh_from_exchange_mat(path: Path):
             )
     payload["source_cell_indices"] = mesh.source_cell_indices.copy()
     payload["element_data_order"] = "dolfinx_local"
-    if all(model == "point" for model in electrode_models):
-        mesh.electrode_model = "pem"
-        mesh.point_electrode_source_nodes = np.asarray(
-            [int(nodes[0]) for nodes in standard_electrodes],
-            dtype=np.int64,
-        )
-    elif all(model in {"cem", "cem_faces"} for model in electrode_models):
-        mesh.electrode_model = "cem"
-    elif all(model == "distributed_point" for model in electrode_models):
-        mesh.electrode_model = "cem"
-    else:
-        mesh.electrode_model = "mixed"
+    kinds = [spec.kind for spec in electrode_specs]
+    mesh.electrode_model = "mixed" if len(set(kinds)) > 1 else kinds[0]
+    singleton_pem_nodes = [
+        int(spec.source_nodes[0])
+        for spec in electrode_specs
+        if spec.kind == "pem" and len(spec.source_nodes) == 1
+    ]
+    mesh.point_electrode_source_nodes = np.asarray(
+        singleton_pem_nodes,
+        dtype=np.int64,
+    )
     ground_value = payload.get("effective_gnd_node", payload.get("gnd_node"))
     ground_array = (
         np.asarray(ground_value).reshape(-1)

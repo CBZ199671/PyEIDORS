@@ -5402,6 +5402,225 @@ def _ensure_single_step_cached_context(
     return ctx
 
 
+def _run_bound_model_request(
+    req: ReconstructionRequest,
+    *,
+    progress_cb: Callable[[str], None] | None = None,
+) -> ReconstructionResult:
+    """Reconstruct with the exact immutable model bound to a DB/live session."""
+
+    def emit(message: str) -> None:
+        if progress_cb is not None:
+            progress_cb(message)
+
+    meta = dict(req.metadata or {})
+    model_id = str(meta.get("model_id", "")).strip()
+    if not model_id:
+        raise ValueError("A bound-model reconstruction requires model_id")
+    from pyeidors.interop import (
+        ActualCurrentResolution,
+        ModelContextFactory,
+        ModelRegistry,
+        ProtocolChannelMapping,
+    )
+
+    registry = ModelRegistry()
+    context = ModelContextFactory(registry).create(model_id)
+    expected_hashes = {
+        "forward_fingerprint": context.registered.forward_fingerprint,
+        "protocol_layout_hash": context.registered.protocol_layout_hash,
+        "protocol_physics_hash": context.registered.protocol_physics_hash,
+    }
+    for name, actual in expected_hashes.items():
+        expected = str(meta.get(name, "")).strip()
+        if not expected:
+            raise ValueError(f"Bound-model reconstruction metadata is missing {name}")
+        if expected != actual:
+            raise ValueError(
+                f"Bound-model reconstruction {name} mismatch: "
+                f"session={expected}, registry={actual}."
+            )
+
+    raw_mapping = meta.get("channel_mapping")
+    if isinstance(raw_mapping, str):
+        try:
+            raw_mapping = json.loads(raw_mapping)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Bound-model channel_mapping is invalid JSON") from exc
+    if not isinstance(raw_mapping, dict):
+        raise ValueError("Bound-model reconstruction requires a proven channel_mapping")
+    channel_mapping = ProtocolChannelMapping.from_mapping(raw_mapping)
+    channel_mapping.validate_for_model(
+        model_stim_matrix=context.protocol.stim_matrix,
+        measurement_count=context.measurement_count,
+    )
+
+    ref_vec_raw = np.asarray(
+        req.reference_frame.to_measurement_vector(req.use_part)
+    ).reshape(-1)
+    tgt_vec_raw = np.asarray(
+        req.target_frame.to_measurement_vector(req.use_part)
+    ).reshape(-1)
+    ref_vec = channel_mapping.apply(ref_vec_raw)
+    tgt_vec = channel_mapping.apply(tgt_vec_raw)
+    runtime_stim_matrix = channel_mapping.runtime_stim_matrix
+    runtime_fingerprint = channel_mapping.runtime_fingerprint
+    expected_count = int(context.measurement_count)
+    if ref_vec.size != expected_count or tgt_vec.size != expected_count:
+        raise ValueError(
+            "Bound-model measurement count mismatch after channel/meas_select "
+            f"mapping: expected={expected_count}, reference={ref_vec.size}, "
+            f"target={tgt_vec.size}."
+        )
+    actual_current_resolution = meta.get("actual_current_resolution")
+    restored_current_resolution = None
+    if actual_current_resolution is not None:
+        if not isinstance(actual_current_resolution, dict):
+            raise ValueError(
+                "Bound-model actual_current_resolution must be a mapping when present"
+            )
+        restored_current_resolution = ActualCurrentResolution.from_mapping(
+            actual_current_resolution
+        )
+        reordered_actual = restored_current_resolution.stim_matrix[
+            np.asarray(channel_mapping.stimulation_permutation, dtype=np.int64)
+        ]
+        if not np.allclose(reordered_actual, runtime_stim_matrix):
+            raise ValueError(
+                "Actual-current resolution does not match the proven protocol mapping"
+            )
+    runtime_current_metadata = {
+        "model_stim_matrix": np.asarray(context.protocol.stim_matrix).tolist(),
+        "runtime_stim_matrix": runtime_stim_matrix.tolist(),
+        "model_to_runtime_row_scales": list(channel_mapping.stimulation_scales),
+        "runtime_fingerprint": runtime_fingerprint,
+        "actual_current_resolution": (
+            None
+            if restored_current_resolution is None
+            else restored_current_resolution.to_mapping()
+        ),
+    }
+
+    meta.update(
+        {
+            "n_elec": len(context.electrode_specs),
+            "n_rings": 1,
+            "electrode_model": (
+                context.electrode_specs[0].kind
+                if len({item.kind for item in context.electrode_specs}) == 1
+                else "mixed"
+            ),
+            "measurement_protocol": "custom",
+            "stim_pattern": "{ad}",
+            "meas_pattern": "{ad}",
+            "electrode_layout": "ring_major",
+            "rotate_meas": False,
+            "use_meas_current": True,
+            "use_meas_current_next": 0,
+            "stim_direction": "ccw",
+            "meas_direction": "ccw",
+            "stim_first_positive": True,
+            "drive_mode": "total_current",
+            "drive_value": 1.0,
+            "geometry_scale_to_m": 1.0,
+            "custom_stim_matrix": runtime_stim_matrix,
+            "custom_meas_matrices": list(context.effective_meas_matrices),
+            "normalize_measurements": context.protocol.normalize_measurements,
+            "model_id": context.registered.model_id,
+            "channel_mapping": channel_mapping.to_mapping(),
+            "runtime_current": runtime_current_metadata,
+            **expected_hashes,
+        }
+    )
+    if context.protocol.normalize_measurements:
+        meta["difference_mode"] = "normalized"
+    cache_key = (
+        "bridge-v3-bound-model",
+        context.registered.forward_fingerprint,
+        runtime_fingerprint,
+        float(req.regularization_alpha),
+        str(meta.get("difference_mode", "raw")),
+        str(meta.get("difference_orientation", "target_minus_reference")),
+        str(meta.get("difference_preset", "eidors_one_step_noser")),
+        str(meta.get("absolute_preset", "eidors_abs_gn")),
+    )
+    system = _get_cached_system(cache_key)
+    if system is None:
+        emit("Loading bound Bridge v3 model context...")
+        system = context.create_system(
+            initialize_inverse=True,
+            runtime_stim_matrix=runtime_stim_matrix,
+            regularization_alpha=float(req.regularization_alpha),
+            difference_mode=str(meta.get("difference_mode", "raw")),
+            difference_orientation=str(
+                meta.get("difference_orientation", "target_minus_reference")
+            ),
+            difference_preset=str(
+                meta.get("difference_preset", "eidors_one_step_noser")
+            ),
+            absolute_preset=str(meta.get("absolute_preset", "eidors_abs_gn")),
+        )
+        setattr(
+            system,
+            "_reconstruction_system_cache_max_bytes",
+            _reconstruction_system_cache_max_bytes(meta),
+        )
+        _put_cached_system(cache_key, system)
+    else:
+        emit("Reusing bound Bridge v3 reconstruction system...")
+
+    from pyeidors.data import MeasurementDataset
+
+    data_type = (
+        req.use_part if req.use_part in {"real", "imag", "mag", "complex"} else "real"
+    )
+    ref_eit = MeasurementDataset.from_metadata(
+        measurements=ref_vec.reshape(1, -1),
+        metadata=meta,
+        data_type=data_type,
+    ).to_eit_data(frame_index=0)
+    tgt_eit = MeasurementDataset.from_metadata(
+        measurements=tgt_vec.reshape(1, -1),
+        metadata=meta,
+        data_type=data_type,
+    ).to_eit_data(frame_index=0)
+
+    emit("Running reconstruction with bound Bridge v3 model...")
+    method = req.method.strip().lower()
+    if method == "gn-absolute":
+        recon = system.absolute_reconstruct(measurement_data=tgt_eit)
+    else:
+        recon = system.difference_reconstruct(
+            measurement_data=tgt_eit,
+            reference_data=ref_eit,
+        )
+    raw_conductivity = np.asarray(getattr(recon, "conductivity", np.asarray([])))
+    conductivity = raw_conductivity
+    coarse2fine = context.coarse2fine_local
+    if (
+        coarse2fine is not None
+        and raw_conductivity.ndim == 1
+        and raw_conductivity.size == coarse2fine.shape[1]
+    ):
+        conductivity = np.asarray(coarse2fine @ raw_conductivity)
+    result_meta = {
+        **meta,
+        "reconstruction_runtime": "bridge_v3_bound_model",
+        "model_context_cache_key": context.cache_key,
+        "coarse2fine_applied": conductivity is not raw_conductivity,
+    }
+    emit("Bound Bridge v3 reconstruction complete")
+    return ReconstructionResult(
+        conductivity=conductivity,
+        raw_conductivity=raw_conductivity,
+        node_coords=context.mesh.coordinates(),
+        cell_connectivity=context.mesh.cells(),
+        measured=getattr(recon, "measured", None),
+        simulated=getattr(recon, "simulated", None),
+        metadata=result_meta,
+    )
+
+
 def _run_full_gn_request(
     req: ReconstructionRequest,
     *,
@@ -5967,6 +6186,11 @@ def run_reconstruction_request(
             runtime_path,
             (req.metadata or {}).get("request_source"),
         )
+        if str((req.metadata or {}).get("model_id", "")).strip():
+            log.info("[recon-dispatch] -> bridge_v3_bound_model")
+            return _maybe_apply_pseudo3d_result(
+                _run_bound_model_request(req, progress_cb=progress_cb)
+            )
         if _flag_enabled((req.metadata or {}).get("pseudo3d_layered_output", False)):
             log.info("[recon-dispatch] -> pseudo3d_layered")
             return _run_pseudo3d_layered_request(req, progress_cb=progress_cb)

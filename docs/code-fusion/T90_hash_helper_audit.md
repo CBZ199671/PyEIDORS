@@ -11,8 +11,8 @@ contracts. Out of scope: actual replacement (no schema bump in T90).
 
 ## §2 Inventory baseline
 
-`grep -rn 'hashlib\.sha256(' src/pyeidors/ scripts/` → 34 sites total
-(28 in `src/pyeidors/`, 6 in `scripts/`).
+`grep -rn 'hashlib\.sha256(' src/pyeidors/ scripts/` → 35 sites total
+(29 in `src/pyeidors/`, 6 in `scripts/`).
 
 `grep -rn 'hashlib\.sha256(.*\.tobytes())' src/pyeidors/` → 0 direct
 raw-`arr.tobytes()` digests. Current multi-line raw-tobytes digests in
@@ -37,6 +37,7 @@ raw-`arr.tobytes()` digests. Current multi-line raw-tobytes digests in
 | `inverse/reconstruction_matrix.py` | 2 | 0 | C V36 RM signature |
 | `inverse/greit.py` | 2 | 0 | C V62 GREIT signature |
 | `inverse/greit_registry.py` | 1 | 0 | B migrated; remaining C GREIT registry |
+| `interop/protocol_mapping.py` | 1 | 0 | C Bridge v3 runtime proof |
 | `io/hdf5_artifacts.py` | 2 | 0 | C HDF5 metadata + streaming dataset payload digest |
 | `perf/capabilities.py` | 1 | 0 | C PETSc CUDA probe disk-cache key |
 
@@ -72,6 +73,9 @@ All F (report-only) or D (file).
   Internal payload normalization already routes ndarray fields through
   `cache.keys._normalize` / `cache.object_signature._normalize_for_signature`
   which uses `hash_array` for ndarray contents. No migration needed.
+  Bridge v3 protocol/current mapping proofs in
+  `interop/protocol_mapping.py` likewise hash a canonical JSON payload so the
+  fingerprint proves the exact channel mapping and runtime current scaling.
 - **D file content / streaming** — `read_bytes()` / chunked
   `digest.update(chunk)`. Out of scope for `hash_array`.
   - `cache/keys.py:82` `hash_path`

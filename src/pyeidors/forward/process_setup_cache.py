@@ -43,6 +43,10 @@ class ForwardStaticSetupBundle:
     electrode_model: str = "cem"
     point_electrode_matrix: csr_matrix | None = None
     ground_dof: int = -1
+    dS_electrodes: Any = None
+    cem_electrode_indices: tuple[int, ...] = ()
+    pem_electrode_indices: tuple[int, ...] = ()
+    cem_boundary_kinds: tuple[str, ...] = ()
 
 
 _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS = 8
@@ -104,6 +108,7 @@ def build_process_forward_setup_key(
     electrode_model: str = "cem",
     point_node_ids: np.ndarray | None = None,
     ground_node: int | None = None,
+    electrode_spec_signature: Any | None = None,
 ) -> str:
     """Build a content-addressed cache key for forward static setup.
 
@@ -121,14 +126,28 @@ def build_process_forward_setup_key(
             "or mesh_content_hash to form a stable cache key."
         )
     model = str(electrode_model or "cem").strip().lower()
-    if model not in {"cem", "pem"}:
-        raise ValueError("electrode_model must be 'cem' or 'pem'")
+    if model not in {"cem", "pem", "mixed"}:
+        raise ValueError("electrode_model must be 'cem', 'pem', or 'mixed'")
     z_dtype = (
         np.dtype(scalar_dtype)
         if scalar_dtype is not None
         else np.dtype(np.complex128 if np.iscomplexobj(z) else np.float64)
     )
-    if model == "cem":
+    if electrode_spec_signature is not None:
+        z_array = np.asarray(z)
+        if not np.issubdtype(z_dtype, np.complexfloating) and np.iscomplexobj(z_array):
+            if has_nonzero_imaginary(z_array):
+                raise RuntimeError(
+                    "complex contact impedance requires a complex PETSc/DOLFINx "
+                    "runtime; use nix develop .#complex or .#complex64"
+                )
+            z_array = np.real(z_array)
+        z_hash = hash_array(np.asarray(z_array, dtype=z_dtype).reshape(-1))
+        point_node_hash = hash_json_payload(
+            {"electrodes": _normalize(electrode_spec_signature)}
+        )
+        ground_node_value = int(ground_node) if ground_node is not None else None
+    elif model == "cem":
         z_array = np.asarray(z)
         if not np.issubdtype(z_dtype, np.complexfloating) and np.iscomplexobj(z_array):
             if has_nonzero_imaginary(z_array):

@@ -318,8 +318,8 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         self.mesh_config = mesh_config or MeshConfig(radius=1.0, refinement=8)
         self.electrode_model = str(electrode_model or "cem").strip().lower()
-        if self.electrode_model not in {"cem", "pem"}:
-            raise ValueError("electrode_model must be 'cem' or 'pem'")
+        if self.electrode_model not in {"cem", "pem", "mixed"}:
+            raise ValueError("electrode_model must be 'cem', 'pem', or 'mixed'")
         self.contact_impedance = (
             None
             if self.electrode_model == "pem" and contact_impedance is None
@@ -934,12 +934,12 @@ class EITSystem(CoreSystemFacadeMixin):
                 f"semantics: {self.electrode_model!r} != {mesh_electrode_model!r}"
             )
         if (
-            self.electrode_model == "pem"
+            self.electrode_model in {"pem", "mixed"}
             and cem_formulation == ROBIN_TRANSCONDUCTANCE_CEM
         ):
             raise ValueError(
                 "cem_formulation='robin_transconductance' is CEM-only; "
-                "native PEM uses electrode_model='pem' with the classic FEM core."
+                "PEM and mixed models use the classic FEM core."
             )
         forward_model_class = (
             RobinTransconductanceForwardModel

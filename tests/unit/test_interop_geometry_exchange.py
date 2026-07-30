@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the standardized EIDORS <-> PyEIDORS interop helpers."""
+"""Tests for the Bridge v3 EIDORS <-> PyEIDORS geometry helpers."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from pyeidors.interop import (
 def make_standard_payload() -> dict[str, object]:
     return {
         "exchange_format": STANDARD_INTEROP_FORMAT,
-        "schema_version": 2,
+        "schema_version": 3,
         "index_base": 1,
         "source_framework": "pyeidors",
         "dimension": 2,
@@ -68,7 +68,7 @@ def make_tetrahedron_payload() -> dict[str, object]:
     )
     return {
         "exchange_format": STANDARD_INTEROP_FORMAT,
-        "schema_version": 2,
+        "schema_version": 3,
         "index_base": 1,
         "source_framework": "pyeidors",
         "dimension": 3,
@@ -119,7 +119,7 @@ def test_validate_exchange_payload_rejects_missing_fields() -> None:
         validate_exchange_payload(payload)
 
 
-def test_validate_exchange_payload_accepts_legacy_v1_2d() -> None:
+def test_v753_validate_exchange_payload_rejects_legacy_v1_2d() -> None:
     payload = make_standard_payload()
     payload["exchange_format"] = LEGACY_INTEROP_FORMAT
     for field in (
@@ -132,7 +132,8 @@ def test_validate_exchange_payload_accepts_legacy_v1_2d() -> None:
     ):
         payload.pop(field)
 
-    validate_exchange_payload(payload)
+    with pytest.raises(ValueError, match="Unsupported exchange format"):
+        validate_exchange_payload(payload)
 
 
 def test_v739_validator_restores_squeezed_one_node_per_electrode_axis() -> None:
@@ -207,7 +208,7 @@ def test_build_mesh_from_exchange_mat_standard_payload(tmp_path: Path) -> None:
     )
 
 
-def test_v735_build_3d_tetrahedron_mesh_from_geometry_v2(tmp_path: Path) -> None:
+def test_v753_build_3d_tetrahedron_mesh_from_geometry_v3(tmp_path: Path) -> None:
     out_mat = tmp_path / "tetrahedron.mat"
     save_exchange_mat(out_mat, make_tetrahedron_payload())
 
@@ -217,7 +218,7 @@ def test_v735_build_3d_tetrahedron_mesh_from_geometry_v2(tmp_path: Path) -> None
     assert mesh.mesh_name == "unit_tetrahedron"
     assert mesh.exchange_format == STANDARD_INTEROP_FORMAT
     assert mesh.mesh_family == "tetrahedron"
-    assert mesh.geometry_version == "interop-v2"
+    assert mesh.geometry_version == "interop-v3"
     assert mesh.electrode_projection == "exact_surface_nodes"
     assert mesh.topology.dim == 3
     assert mesh.geometry.dim == 3
@@ -343,13 +344,16 @@ def test_v747_native_pem_uses_exact_node_currents_and_ignores_contact_impedance(
     )
 
 
-def test_v743_legacy_distributed_point_sets_require_projection(
+def test_v754_weighted_pem_preserves_exact_weights_without_projection(
     tmp_path: Path,
 ) -> None:
     payload = make_standard_payload()
     payload["electrode_nodes"] = np.array([[1, 3], [2, 4]], dtype=np.int64)
     payload["electrode_node_counts"] = np.array([2, 2], dtype=np.int64)
     payload["n_elec"] = 2
+    payload["electrode_model"] = ["distributed_point", "distributed_point"]
+    payload["pem_node_weights"] = np.array([[0.25, 0.75], [0.6, 0.4]])
+    payload["effective_gnd_node"] = 1
     out_mat = tmp_path / "distributed_point_electrodes.mat"
     save_exchange_mat(out_mat, payload)
 
@@ -359,10 +363,42 @@ def test_v743_legacy_distributed_point_sets_require_projection(
         "distributed_point",
         "distributed_point",
     ]
-    assert mesh.electrode_projection == "incident_boundary_facets"
+    assert mesh.electrode_model == "pem"
+    assert mesh.electrode_projection == "none"
+    assert [spec.kind for spec in mesh.electrode_specs] == ["pem", "pem"]
+    np.testing.assert_allclose(mesh.electrode_specs[0].node_weights, [0.25, 0.75])
+    np.testing.assert_allclose(mesh.electrode_specs[1].node_weights, [0.6, 0.4])
     for electrode in range(1, 3):
         tag = mesh.association_table[f"electrode_{electrode}"]
-        assert np.count_nonzero(mesh.facet_tags.values == tag) >= 1
+        assert np.count_nonzero(mesh.facet_tags.values == tag) == 0
+
+
+def test_v754_weighted_pem_without_weights_fails_closed() -> None:
+    payload = make_standard_payload()
+    payload["electrode_nodes"] = np.array([[1, 3], [2, 4]], dtype=np.int64)
+    payload["electrode_node_counts"] = np.array([2, 2], dtype=np.int64)
+    payload["n_elec"] = 2
+    payload["electrode_model"] = ["distributed_point", "distributed_point"]
+
+    with pytest.raises(ValueError, match="requires N2E or pem_node_weights"):
+        validate_exchange_payload(payload)
+
+
+def test_v755_cem_n2e_preserves_augmented_electrode_unknowns() -> None:
+    payload = make_standard_payload()
+    n_nodes = np.asarray(payload["nodes"]).shape[0]
+    n_elec = int(payload["n_elec"])
+    payload["electrode_model"] = ["cem"] * n_elec
+    payload["N2E"] = np.zeros((n_elec, n_nodes + n_elec))
+
+    validate_exchange_payload(payload)
+
+    payload["N2E"] = np.zeros((n_nodes + n_elec, n_elec))
+    validate_exchange_payload(payload)
+
+    payload["N2E"] = np.zeros((n_elec, n_nodes - 1))
+    with pytest.raises(ValueError, match="n_system_unknowns >= n_nodes"):
+        validate_exchange_payload(payload)
 
 
 @pytest.mark.parametrize(
@@ -373,7 +409,7 @@ def test_v743_legacy_distributed_point_sets_require_projection(
         ("cell_type", "triangle", "requires cell_type"),
     ],
 )
-def test_v735_geometry_v2_rejects_contract_drift(
+def test_v753_geometry_v3_rejects_contract_drift(
     field: str,
     value: object,
     message: str,
@@ -449,7 +485,7 @@ def test_v698_exchange_facet_tags_survive_dolfinx_vertex_reordering(
     assert np.count_nonzero(mesh.facet_tags.values == gap_tag) == n_electrodes
 
 
-def test_v738_geometry_v2_rejects_disagreeing_boundary_aliases() -> None:
+def test_v753_geometry_v3_rejects_disagreeing_boundary_aliases() -> None:
     payload = make_standard_payload()
     payload["boundary_edges"] = np.array([[1, 2]], dtype=np.int64)
 

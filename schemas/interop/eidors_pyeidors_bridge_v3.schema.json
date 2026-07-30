@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pyeidors.org/schemas/eidors_pyeidors_bridge_v3.schema.json",
+  "title": "EIDORS-PyEIDORS Bridge Package v3 manifest",
+  "type": "object",
+  "required": [
+    "exchange_format",
+    "schema_version",
+    "source_framework",
+    "package_kind",
+    "model_id",
+    "forward_fingerprint",
+    "protocol_layout_hash",
+    "protocol_physics_hash",
+    "files",
+    "provenance",
+    "capabilities"
+  ],
+  "properties": {
+    "exchange_format": {
+      "const": "eidors_pyeidors_bridge_v3"
+    },
+    "schema_version": {
+      "const": 3
+    },
+    "source_framework": {
+      "enum": [
+        "eidors",
+        "pyeidors",
+        "unknown"
+      ]
+    },
+    "package_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_id": {
+      "$ref": "#/$defs/sha256"
+    },
+    "forward_fingerprint": {
+      "$ref": "#/$defs/sha256"
+    },
+    "protocol_layout_hash": {
+      "$ref": "#/$defs/sha256"
+    },
+    "protocol_physics_hash": {
+      "$ref": "#/$defs/sha256"
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "model",
+        "geometry",
+        "protocol",
+        "fields"
+      ],
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/fileEntry"
+        },
+        "geometry": {
+          "$ref": "#/$defs/fileEntry"
+        },
+        "protocol": {
+          "$ref": "#/$defs/fileEntry"
+        },
+        "fields": {
+          "$ref": "#/$defs/fileEntry"
+        },
+        "measurements": {
+          "$ref": "#/$defs/fileEntry"
+        },
+        "reconstruction": {
+          "$ref": "#/$defs/fileEntry"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/fileEntry"
+      }
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "capabilities": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "(^[/\\\\])|(^[A-Za-z]:)|(^|[/\\\\])\\.\\.([/\\\\]|$)"
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fileEntry": {
+      "type": "object",
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
