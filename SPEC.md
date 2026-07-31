@@ -152,7 +152,7 @@ Authoritative invariant rows are split by domain below; exact routing is in `doc
 
 ### §T.phase — active priority queue
 
-Only non-completed work is active here. Frozen environment tasks: T2/T3/T7. Frozen research tasks: T11/T27/T28/T68/T70. Current governance order: T615. Completed rows are in `docs/spec/history/tasks-completed.md`.
+Only non-completed work is active here. Frozen environment tasks: T2/T3/T7. Frozen research tasks: T11/T27/T28/T68/T70. Current follow-up debt: T616. Completed rows are in `docs/spec/history/tasks-completed.md`.
 
 | id | status | task | cites |
 |----|--------|------|-------|
@@ -166,7 +166,7 @@ Only non-completed work is active here. Frozen environment tasks: T2/T3/T7. Froz
 | T70 | . | FROZEN research: SBL/BSBL acceptance benchmark only after explicit unfreeze + T27 candidate exists; compare vs GN/NOSER/Laplace/TV-IRLS/4D prior; promote only if accuracy/latency win recorded | V31,V35,V49,T27 |
 | T97 | . | Capture + gate separate MATLAB/EIDORS 5936 measurement-protocol official fixture; only after pass may UI/docs/papers say `48e/5936 official-equivalent`. Until then T49 wording stays 48e official fixture + 5936 surrogate | V50,V63 |
 | T585 | . | Restore default full-suite `src/pyeidors` coverage to ≥87% without lowering gate | V637 |
-| T615 | . | Audit four oversized modules plus tracked `reports/`/`pictures/`; record impact-ranked decomposition and keep/drop decisions without code/asset mutation | V75,V779 |
+| T616 | . | Repair four missing invariant evidence paths; make tracked-report exception/provenance policy explicit; resolve three unreferenced picture candidates after visual/provenance review | V46,V47,V48,V50,V779 |
 
 ## §B — bugs
 
