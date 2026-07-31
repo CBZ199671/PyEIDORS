@@ -607,3 +607,4 @@ Immutable completed-task registry; active work remains in root `SPEC.md`.
 | T611 | x | Harden/rebuild 3 Linux one-click packages against novice PATH/Nix/Python/CUDA conflicts; expand beginner docs + clean-host acceptance | V132,V671,V673,V680,V770,V771 |
 | T612 | x | Backprop GUI smoke drift, legacy runner, complex cache scalar, lock-free worker exit, exact Bridge rewrite, dead interop helper | V146,V245,V317,V734,V753,V756,V757,V764,V772,V773,V774,V775,V776 |
 | T613 | x | Add registry-wide SPEC integrity gate; fix duplicate B IDs; archive completed T/B; split V by domain with root index + ID map; refresh §T.phase, §I landed markers, V21 scope | V21,V777 |
+| T614 | x | Delete placeholder `pyeidors.main` hello entrypoint and coverage-only tests | V778,I |

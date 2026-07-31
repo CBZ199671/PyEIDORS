@@ -1,8 +1,6 @@
-"""Small branch coverage tests for entrypoints and facade helpers."""
+"""Small branch coverage tests for package and facade helpers."""
 
 from __future__ import annotations
-
-import runpy
 
 import numpy as np
 import pytest
@@ -10,7 +8,6 @@ import pytest
 import pyeidors
 import pyeidors.core_system_facade as facade_module
 import pyeidors.forward as forward_pkg
-import pyeidors.main as main_module
 from pyeidors.core_system_facade import CoreSystemFacadeMixin
 
 
@@ -20,12 +17,6 @@ def test_package_dir_and_invalid_lazy_attributes():
         _ = getattr(pyeidors, "not_exported")
     with pytest.raises(AttributeError, match="has no attribute"):
         _ = getattr(forward_pkg, "not_exported")
-
-
-def test_main_module_runs_script_entrypoint(capsys):
-    runpy.run_path(main_module.__file__, run_name="__main__")
-    captured = capsys.readouterr()
-    assert "Hello from pyeidors!" in captured.out
 
 
 def test_core_system_facade_uses_default_baseline_and_helpers(

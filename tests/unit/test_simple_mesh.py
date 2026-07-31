@@ -1,11 +1,10 @@
-"""Small coverage tests for simple mesh wrapper and package main."""
+"""Small coverage tests for the simple mesh wrapper."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 from pyeidors.geometry import simple_mesh_generator as simple_mesh_module
-from pyeidors.main import main
 
 
 def test_simple_mesh_generator_uses_create_eit_mesh(monkeypatch):
@@ -41,9 +40,3 @@ def test_simple_mesh_generator_uses_create_eit_mesh(monkeypatch):
     assert captured["n_elec"] == 8
     assert captured["radius"] == 1.2
     assert captured["electrode_coverage"] == 0.25
-
-
-def test_main_entrypoint_prints(capsys):
-    main()
-    captured = capsys.readouterr()
-    assert "Hello from pyeidors!" in captured.out
