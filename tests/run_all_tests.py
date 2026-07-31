@@ -11,6 +11,20 @@ from pathlib import Path
 import time
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_TESTS: tuple[tuple[str, Path], ...] = (
+    ("Basic Module Test", REPO_ROOT / "tests" / "unit" / "test_pyeidors.py"),
+    (
+        "Simplified System Test",
+        REPO_ROOT / "tests" / "unit" / "test_simplified_eit_system.py",
+    ),
+    (
+        "Complete System Test",
+        REPO_ROOT / "tests" / "unit" / "test_complete_eit_system.py",
+    ),
+)
+
+
 class TestRunner:
     """Test runner class."""
 
@@ -18,7 +32,7 @@ class TestRunner:
         self.results = {}
         self.start_time = time.time()
 
-    def run_test(self, test_name: str, test_script: str) -> bool:
+    def run_test(self, test_name: str, test_script: str | Path) -> bool:
         """
         Run a single test script.
 
@@ -31,20 +45,22 @@ class TestRunner:
         """
         print(f"\n{'=' * 60}")
         print(f"Running: {test_name}")
-        print(f"Script: {test_script}")
+        test_path = Path(test_script)
+        print(f"Script: {test_path}")
         print(f"{'=' * 60}")
 
-        if not Path(test_script).exists():
-            print(f"❌ Test script not found: {test_script}")
+        if not test_path.is_file():
+            print(f"❌ Test script not found: {test_path}")
             self.results[test_name] = {"status": "missing", "time": 0}
             return False
 
         start_time = time.time()
 
         try:
-            # Run test script
+            # Execute pytest modules through pytest so collection actually runs.
             result = subprocess.run(
-                [sys.executable, test_script],
+                [sys.executable, "-m", "pytest", str(test_path), "-q", "--no-cov"],
+                cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
@@ -169,17 +185,10 @@ def main():
 
     runner = TestRunner()
 
-    # Define test list
-    tests = [
-        ("Basic Module Test", "test_pyeidors.py"),
-        ("Simplified System Test", "test_simplified_eit_system.py"),
-        ("Complete System Test", "test_complete_eit_system.py"),
-    ]
-
     all_passed = True
 
     # Run all tests
-    for test_name, test_script in tests:
+    for test_name, test_script in DEFAULT_TESTS:
         success = runner.run_test(test_name, test_script)
         if not success:
             all_passed = False

@@ -41,11 +41,6 @@ DEFAULT_FILE_NAMES = MappingProxyType(
 )
 
 
-def _as_text(value: Any) -> str:
-    array = np.asarray(value).reshape(-1)
-    return "" if array.size == 0 else str(array[0])
-
-
 def _as_python_scalar(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
@@ -424,9 +419,13 @@ class BridgeV3Package:
         if measurements is not None:
             savemat(root / MEASUREMENTS_NAME, dict(measurements))
             role_paths["measurements"] = root / MEASUREMENTS_NAME
+        else:
+            (root / MEASUREMENTS_NAME).unlink(missing_ok=True)
         if reconstruction is not None:
             _write_json_file(root / RECONSTRUCTION_NAME, dict(reconstruction))
             role_paths["reconstruction"] = root / RECONSTRUCTION_NAME
+        else:
+            (root / RECONSTRUCTION_NAME).unlink(missing_ok=True)
         decoded_model = _load_json_file(root, MODEL_NAME)
         decoded_geometry = _load_mat_file(root, GEOMETRY_NAME)
         decoded_protocol = _load_mat_file(root, PROTOCOL_NAME)

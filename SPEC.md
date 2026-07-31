@@ -891,6 +891,11 @@ CLI additions still pending unless named above:
 | V769 | Professor-facing forward visualization ! every PyEIDORS/NGSolve/EIDORS selected-case walkthrough renders one identical drive's Classic body field, Robin body field, signed body difference, Classic+Robin electrode-voltage comparison, individual voltage traces, and signed voltage difference; Classic/Robin fields share limits, differences use symmetric zero-centred limits, titles/axes are bilingual, and plots are generated from the same solved arrays used by diagnostics | examples/cem_exact_extension_walkthrough/experiment_common.py; examples/cem_exact_extension_walkthrough/build_notebooks.py; examples/cem_exact_extension_walkthrough/eidors_selected_case_walkthrough.m; tests/unit/test_cem_exact_extension_walkthrough.py |
 | V770 | Linux 一键安装 host-tool isolation ! 外层安装器优先绝对系统路径并功能探测 `tar/zstd/unzip/curl/sha256sum`; PATH shadow/损坏/不兼容工具 ⊥ 被采用。既有 Nix 候选须 `nix>=2.4`、同目录可用 `nix-store`、版本探测成功；缓存导入复用已验证绝对路径，⊥ 被旧 shim 劫持；仍保持 unsigned `--no-check-sigs`、⊥ key/`nix.conf` 修改 | scripts/release/build_easy_installers.sh; scripts/release/easy-install/*; tests/unit/test_easy_installer_hardening.py |
 | V771 | Pure-Nix install/runtime host-env isolation ! 外层解包与内层安装在调用 host tool/Nix 前清除 `LD_PRELOAD`、`PYTHONHOME/PYTHONPATH/PYTHONSTARTUP/PYTHONUSERBASE/VIRTUAL_ENV/CONDA_*` 与 host CUDA/toolchain override；launcher同样清除，Nix wrapper强制自身 `CUDA_HOME/CUDA_PATH/CUDACXX/PETSC_DIR/SLEPC_DIR`。用户自装 PyTorch/CUDA/旧动态库 ⊥ 覆盖 packaged Python/CUDA/Nix；DISPLAY/Wayland + host NVIDIA driver discovery 保留；污染环境 install + doctor real/complex64/complex128 ! `status=ok` | flake.nix; scripts/release/easy-install/*; tests/unit/test_easy_installer_hardening.py |
+| V772 | GUI i18n tests ! explicit language setup + `finally` restore; fixed translated-text assertion ⊥ depend ambient system locale or prior test order | tests/unit/test_eit_app_gui_smoke.py |
+| V773 | Advertised `tests/run_all_tests.py` ! invoke pytest on existing `tests/unit/` targets; missing relative path or direct execution of pytest modules ⊥ report false pass/missing | tests/run_all_tests.py; tests/unit/test_run_all_tests.py; FILE_ORGANIZATION.md |
+| V774 | Generic cache-key normalization ! Python `complex` + NumPy complex scalar canonicalize explicit finite real/imag values before JSON; equal values byte-stable; differing real/imag values produce distinct SHA256 keys | src/pyeidors/cache/keys.py; tests/unit/test_cache_manager_extended.py |
+| V775 | Persistent backend global/atexit shutdown ! evict pool then request lock-free worker stop; concurrent `stdout.readline()` request ⊥ block interpreter shutdown behind worker `_lock` | src/eit_app/backend_worker_pool.py; tests/unit/test_gui_shutdown_regressions.py; V146 |
+| V776 | `BridgeV3Package.write` existing-directory result ! exact current package roles: omitted `measurements`/`reconstruction` delete stale standard optional files before manifest commit; manifest + directory optional-role state agree | src/pyeidors/interop/bridge_v3.py; tests/unit/test_interop_bridge_v3.py; V753 |
 
 ## §T — tasks
 
@@ -1568,6 +1573,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T609 | x | Add one-click v3 package/script GUI, asset manager, selectors, preview and beginner examples/docs | V755,V761 |
 | T610 | x | Run bidirectional identity, voltage/Jacobian parity, full Nix/Ruff/build/installed-CLI delivery gates | V762 |
 | T611 | x | Harden/rebuild 3 Linux one-click packages against novice PATH/Nix/Python/CUDA conflicts; expand beginner docs + clean-host acceptance | V132,V671,V673,V680,V770,V771 |
+| T612 | x | Backprop GUI smoke drift, legacy runner, complex cache scalar, lock-free worker exit, exact Bridge rewrite, dead interop helper | V146,V245,V317,V734,V753,V756,V757,V764,V772,V773,V774,V775,V776 |
 
 ## §B — bugs
 
@@ -2248,3 +2254,10 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B671 | 2026-07-31 | 一键包仅用 `command -v` 判断 `tar/zstd/nix` 存在，PATH 前置损坏/旧 shim 被直接执行；Nix cache 子脚本又独立重选 Nix，导致已存在正确系统 Nix 仍可被假 `nix` 劫持 | V770,T611 |
 | B672 | 2026-07-31 | packaged launcher继承用户 `PYTHONPATH/PYTHONHOME`，Nix CUDA wrapper又以 `--set-default` 接受外部 `CUDA_HOME/CUDACXX`；用户旧 venv/PyTorch/CUDA 可注入或覆盖封闭运行时 | V771,T611 |
 | B673 | 2026-07-31 | 一键安装仅在导入缓存之后、运行 doctor 之前清理 host 环境；兼容 host Bash 的旧 `LD_PRELOAD` 可在 Nix 版本探测阶段注入不兼容 glibc，导致正确 Nix 被误报为损坏。外层与内层入口必须在首个 host tool/Nix 子进程前清理环境 | V771,T611 |
+| B674 | 2026-07-31 | V317 GUI warm smoke retained pre-AmgX `cuda` expectation after real+GPU route became `cuda-amgx` | V317,T612 |
+| B675 | 2026-07-31 | Bridge v3 GUI import smoke kept incomplete `SimpleNamespace` after managed registry began requiring valid package root/manifest/identity | V756,V757,T612 |
+| B676 | 2026-07-31 | Runtime diagnostic smoke hard-coded Chinese text under ambient locale; English Nix/WSL locale deterministically failed | V772,T612 |
+| B677 | 2026-07-31 | Advertised legacy runner looked for three moved modules at repo root and executed pytest modules as plain Python, yielding missing/false-pass results | V773,T612 |
+| B678 | 2026-07-31 | Generic cache `_normalize` passed Python/NumPy complex scalars through to `json.dumps`, raising `TypeError` under complex profiles | V774,T612 |
+| B679 | 2026-07-31 | atexit pool cleanup called lock-taking `worker.shutdown()` while request could hold `_lock` blocked in `stdout.readline()` | V146,V775,T612 |
+| B680 | 2026-07-31 | `BridgeV3Package.write` reused existing directory without deleting omitted optional artifacts, leaving stale measurements/reconstruction outside new manifest | V753,V776,T612 |

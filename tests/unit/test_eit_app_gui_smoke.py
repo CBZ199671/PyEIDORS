@@ -493,22 +493,31 @@ def test_runtime_diagnostics_are_hidden_for_regular_gui_users(monkeypatch) -> No
 
 
 def test_runtime_diagnostics_explains_amgx_cuda_downgrade_for_developers() -> None:
-    text = main_window_module._format_runtime_diagnostics(
-        {
-            "mesh_family": "tetra",
-            "forward_backend_effective": "dolfinx",
-            "petsc_device_effective": "cuda",
-            "forward_solver_preset": "spd_gamg",
-            "petsc_amgx_available": False,
-            "forward_solver_policy_reason": "amgx_unavailable_downgraded_to_spd_gamg",
-            "torch_device": "cuda",
-        },
-        developer=True,
-    )
+    from eit_app.i18n import current_language, set_language
 
-    assert "solver=spd_gamg" in text
-    assert "AmgX=false" in text
-    assert "AmgX 不可用时使用 spd_gamg CUDA" in text
+    previous_language = current_language()
+    set_language("zh", persist=False)
+    try:
+        text = main_window_module._format_runtime_diagnostics(
+            {
+                "mesh_family": "tetra",
+                "forward_backend_effective": "dolfinx",
+                "petsc_device_effective": "cuda",
+                "forward_solver_preset": "spd_gamg",
+                "petsc_amgx_available": False,
+                "forward_solver_policy_reason": (
+                    "amgx_unavailable_downgraded_to_spd_gamg"
+                ),
+                "torch_device": "cuda",
+            },
+            developer=True,
+        )
+
+        assert "solver=spd_gamg" in text
+        assert "AmgX=false" in text
+        assert "AmgX 不可用时使用 spd_gamg CUDA" in text
+    finally:
+        set_language(previous_language, persist=False)
 
 
 def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
@@ -3501,6 +3510,7 @@ def test_simulation_forward_config_clamps_dense_3d_ring_area_before_mesh_build()
 @pytest.mark.gui
 def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from types import SimpleNamespace
 
@@ -3517,12 +3527,31 @@ def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
         radius=0.72,
         height=0.44,
     )
+    source_root = tmp_path / "source-package"
+    managed_root = tmp_path / "managed-package"
     loaded_bundle = SimpleNamespace(
+        root=source_root,
+        manifest=SimpleNamespace(script_path=None),
         geometry_payload=None,
         measurements=None,
         reconstruction_preset=None,
     )
     window._ensure_interop_services()
+    registered = SimpleNamespace(
+        model_id="model-id",
+        forward_fingerprint="forward-fingerprint",
+        protocol_layout_hash="protocol-layout-hash",
+        protocol_physics_hash="protocol-physics-hash",
+        asset_path=managed_root,
+    )
+    register_calls: list[tuple[Path, str]] = []
+    bind_calls: list[tuple[str, str]] = []
+    window._bridge_model_registry = SimpleNamespace(
+        register=lambda root, *, display_name: (
+            register_calls.append((Path(root), str(display_name))) or registered
+        ),
+        bind=lambda flow, model_id: bind_calls.append((str(flow), str(model_id))),
+    )
     monkeypatch.setattr(
         window._interop_importer,
         "preview_loaded_package",
@@ -3537,6 +3566,8 @@ def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
     assert cfg.n_rings == 2
     assert cfg.radius == pytest.approx(0.72)
     assert cfg.height == pytest.approx(0.44)
+    assert register_calls == [(source_root, source_root.name)]
+    assert bind_calls == [("simulation", "model-id")]
 
     _close_window(window)
 
@@ -5207,8 +5238,8 @@ def test_v317_3d_simulation_backend_warmup_reports_status_and_metadata(
     window._schedule_sim_forward_prewarm()
 
     assert len(warmed) == 1
-    assert warmed[0][1] == "cuda"
-    report = window._fwd_backend_warm_reports["cuda"]
+    assert warmed[0][1] == "cuda-amgx"
+    report = window._fwd_backend_warm_reports["cuda-amgx"]
     assert report["pid"] == 4242
     assert report["primed_runtime"] is True
     assert report["prime_duration_ms"] == 8.0

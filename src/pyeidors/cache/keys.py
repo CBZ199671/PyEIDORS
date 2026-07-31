@@ -98,6 +98,14 @@ def _normalize(obj: Any) -> Any:
             "dtype": str(obj.dtype),
             "sha256": hash_array_payload(obj),
         }
+    if isinstance(obj, (complex, np.complexfloating)):
+        value = complex(obj)
+        return {
+            "__complex__": {
+                "real": float(value.real),
+                "imag": float(value.imag),
+            }
+        }
     if isinstance(obj, (np.floating, np.integer, np.bool_)):
         return obj.item()
     if isinstance(obj, dict):

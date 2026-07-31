@@ -34,6 +34,25 @@ def test_cache_key_stable_for_semantically_equal_payload():
     assert build_cache_key(parts_a) == build_cache_key(parts_b)
 
 
+def test_v774_cache_key_canonicalizes_python_and_numpy_complex_scalars() -> None:
+    def _key(value: object) -> str:
+        return build_cache_key(
+            CacheKeyParts(
+                artifact="complex-scalar",
+                payload={"value": value},
+                namespace="unit",
+                code_fingerprint="abc",
+            )
+        )
+
+    python_key = _key(1.0 + 2.0j)
+    numpy_key = _key(np.complex64(1.0 + 2.0j))
+
+    assert python_key == numpy_key
+    assert python_key == _key(1.0 + 2.0j)
+    assert python_key != _key(1.0 + 3.0j)
+
+
 def test_cache_manager_process_hit():
     manager = CacheManager(
         scope="process", policy=CachePolicy(process_max_bytes=2 * 1024**2)

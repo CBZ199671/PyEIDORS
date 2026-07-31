@@ -566,7 +566,7 @@ def shutdown_persistent_backend_workers() -> None:
         workers = list(_POOL.values())
         _POOL.clear()
     for worker in workers:
-        worker.shutdown()
+        worker.request_stop()
 
 
 atexit.register(shutdown_persistent_backend_workers)

@@ -216,6 +216,41 @@ def test_v146_backend_worker_stop_does_not_wait_for_request_lock(tmp_path) -> No
             pool._POOL.pop(key, None)
 
 
+def test_v775_backend_worker_global_shutdown_does_not_wait_for_request_lock(
+    tmp_path,
+) -> None:
+    import eit_app.backend_worker_pool as pool
+
+    worker = pool._PersistentBackendWorker(repo=tmp_path, profile="cuda")
+    key = (str(tmp_path.resolve()), "cuda")
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_request_lock() -> None:
+        with worker._lock:
+            lock_acquired.set()
+            release_lock.wait(timeout=1.0)
+
+    thread = threading.Thread(target=hold_request_lock)
+    thread.start()
+    assert lock_acquired.wait(timeout=1.0)
+    with pool._POOL_LOCK:
+        pool._POOL[key] = worker
+    try:
+        start = time.monotonic()
+
+        pool.shutdown_persistent_backend_workers()
+
+        assert time.monotonic() - start < 0.2
+        with pool._POOL_LOCK:
+            assert key not in pool._POOL
+    finally:
+        release_lock.set()
+        thread.join(timeout=1.0)
+        with pool._POOL_LOCK:
+            pool._POOL.pop(key, None)
+
+
 def test_forward_controller_rejects_second_solve_while_busy() -> None:
     _get_app()
     controller = ForwardSolverController()

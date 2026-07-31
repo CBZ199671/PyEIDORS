@@ -132,6 +132,41 @@ def test_v753_v3_roundtrip_has_required_identity_and_files(tmp_path: Path) -> No
     assert package.fields["background_elem_data"] == pytest.approx(1.0)
 
 
+def test_v776_rewrite_removes_omitted_optional_package_files(
+    tmp_path: Path,
+) -> None:
+    model, geometry, protocol, fields = _payloads()
+    root = tmp_path / "bridge_v3"
+    BridgeV3Package.write(
+        root,
+        model=model,
+        geometry=geometry,
+        protocol=protocol,
+        fields=fields,
+        measurements={"homogeneous": np.asarray([0.1, 0.2])},
+        reconstruction={"method": "noser_rm"},
+    )
+
+    package = BridgeV3Package.write(
+        root,
+        model=model,
+        geometry=geometry,
+        protocol=protocol,
+        fields=fields,
+    )
+
+    assert package.measurements is None
+    assert package.reconstruction is None
+    assert not (root / "measurements.mat").exists()
+    assert not (root / "reconstruction.json").exists()
+    assert set(package.manifest["files"]) == {
+        "model",
+        "geometry",
+        "protocol",
+        "fields",
+    }
+
+
 def test_v764_singleton_complex_measurement_has_stable_identity(
     tmp_path: Path,
 ) -> None:
