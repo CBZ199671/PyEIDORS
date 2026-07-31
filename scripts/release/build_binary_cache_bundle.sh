@@ -44,10 +44,7 @@ MAX_JOBS="${MAX_JOBS:-1}"
 CACHE_COMPRESSION="${CACHE_COMPRESSION:-zstd}"
 CACHE_COMPRESSION_LEVEL="${CACHE_COMPRESSION_LEVEL:-6}"
 ZSTD_LEVEL="${ZSTD_LEVEL:-1}"
-CACHE_KEY_NAME="${CACHE_KEY_NAME:-pyeidors-$VERSION-$SYSTEM}"
-CACHE_KEY_DIR="${CACHE_KEY_DIR:-$DIST_DIR/binary-cache-keys}"
-SECRET_KEY_FILE="${SECRET_KEY_FILE:-$CACHE_KEY_DIR/$CACHE_KEY_NAME.sec}"
-PUBLIC_KEY_FILE="${PUBLIC_KEY_FILE:-$CACHE_KEY_DIR/$CACHE_KEY_NAME.pub}"
+CREATE_TARBALL="${CREATE_TARBALL:-1}"
 
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
 PACKAGE_ATTRS_DEFAULT=(
@@ -150,24 +147,13 @@ nix "${NIX_FLAGS[@]}" path-info \
   "${PACKAGE_REFS[@]}" \
   > "$BUNDLE_DIR/closure-store-paths.json"
 
-if [ ! -f "$SECRET_KEY_FILE" ] || [ ! -f "$PUBLIC_KEY_FILE" ]; then
-  echo "[binary-cache] generating signing key: $CACHE_KEY_NAME"
-  mkdir -p "$CACHE_KEY_DIR"
-  nix-store --generate-binary-cache-key "$CACHE_KEY_NAME" "$SECRET_KEY_FILE" "$PUBLIC_KEY_FILE"
-  chmod 600 "$SECRET_KEY_FILE"
-fi
-
-echo "[binary-cache] signing closure paths with $PUBLIC_KEY_FILE"
-nix "${NIX_FLAGS[@]}" store sign \
-  --key-file "$SECRET_KEY_FILE" \
-  --stdin < "$BUNDLE_DIR/closure-store-paths.txt"
-
-echo "[binary-cache] exporting closures to file binary cache"
+echo "[binary-cache] exporting unsigned closures to file binary cache"
 CACHE_URI="file://$CACHE_DIR?compression=$CACHE_COMPRESSION&compression-level=$CACHE_COMPRESSION_LEVEL"
 nix "${NIX_FLAGS[@]}" copy \
   --to "$CACHE_URI" \
   "${PACKAGE_REFS[@]}" \
   --option warn-dirty false
+find "$CACHE_DIR" -type f -name '*.narinfo' -exec sed -i '/^Sig:/d' {} +
 
 cat > "$BUNDLE_DIR/install-from-local-cache.sh" <<'SH'
 #!/usr/bin/env bash
@@ -175,45 +161,28 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE_DIR="$SCRIPT_DIR/nix-cache"
-PUBLIC_KEY_FILE="$SCRIPT_DIR/binary-cache-public-key.txt"
 
 if [ ! -f "$CACHE_DIR/nix-cache-info" ]; then
   echo "[pyeidors-cache] ERROR: local Nix cache not found: $CACHE_DIR" >&2
   exit 1
 fi
-if [ ! -f "$PUBLIC_KEY_FILE" ]; then
-  echo "[pyeidors-cache] ERROR: public key file not found: $PUBLIC_KEY_FILE" >&2
-  exit 1
-fi
 
-PUBLIC_KEY="$(tr -d '\n' < "$PUBLIC_KEY_FILE")"
-echo "[pyeidors-cache] importing all store paths from $CACHE_DIR"
+echo "[pyeidors-cache] importing unsigned local store paths from $CACHE_DIR"
 if ! nix --extra-experimental-features "nix-command flakes" copy \
-  --option extra-trusted-public-keys "$PUBLIC_KEY" \
+  --no-check-sigs \
   --all \
   --from "file://$CACHE_DIR"; then
   cat >&2 <<EOF
-[pyeidors-cache] ERROR: Nix refused this local binary cache.
-
-This usually means you are using multi-user Nix and your current user is not
-allowed to trust a new binary cache key from the command line.
-
-Ask the machine administrator to add this line to /etc/nix/nix.conf, then
-restart nix-daemon:
-
-extra-trusted-public-keys = $PUBLIC_KEY
-
-After that, run this script again:
-
-bash "$SCRIPT_DIR/install-from-local-cache.sh"
+[pyeidors-cache] ERROR: local cache import failed.
+This bundle is unsigned and already uses --no-check-sigs. Do not add a cache
+key and do not edit nix.conf. Run the one-click .run installer as an ordinary
+user so it can handle multi-user Nix permissions safely.
 EOF
   exit 1
 fi
 echo "[pyeidors-cache] import complete"
 SH
 chmod +x "$BUNDLE_DIR/install-from-local-cache.sh"
-rm -f "$BUNDLE_DIR/binary-cache-public-key.txt"
-cp "$PUBLIC_KEY_FILE" "$BUNDLE_DIR/binary-cache-public-key.txt"
 
 cat > "$BUNDLE_DIR/README_FAST_INSTALL.zh.md" <<EOF
 # PyEIDORS $VERSION 快速安装二进制缓存包
@@ -224,7 +193,6 @@ cat > "$BUNDLE_DIR/README_FAST_INSTALL.zh.md" <<EOF
 
 - nix-cache/：标准 Nix file binary cache。
 - install-from-local-cache.sh：把本地 binary cache 导入当前用户的 Nix store。
-- binary-cache-public-key.txt：本地 binary cache 的公开签名 key。
 - top-level-store-paths.txt：六个 PyEIDORS package 的顶层 store path。
 - closure-store-paths.txt：六个 package 共享后的完整闭包路径列表。
 - PyEIDORS-$VERSION-pure-nix-source.zip：源码/flake 分发包。
@@ -307,11 +275,7 @@ GTX 1660 属于 \`sm_75\`，可以使用主线 GPU 入口。GTX 1050 / GTX 1050 
 bash install-from-local-cache.sh
 \`\`\`
 
-如果你的 Nix daemon 不接受命令行传入的 trusted key，请把下面这一行追加到 Nix 配置后重新打开终端，或在 multi-user Nix 中让管理员写入 /etc/nix/nix.conf 并重启 nix-daemon：
-
-\`\`\`bash
-extra-trusted-public-keys = $(cat "$PUBLIC_KEY_FILE")
-\`\`\`
+本缓存为无签名本地缓存，导入时使用 \`--no-check-sigs\`。不需要 cache key，不要修改 \`/etc/nix/nix.conf\`，也不要配置 \`extra-trusted-public-keys\`。
 
 ### 2. 解压源码包
 
@@ -353,6 +317,8 @@ cat > "$BUNDLE_DIR/manifest.json" <<EOF
   "version": "$VERSION",
   "system": "$SYSTEM",
   "flake_ref": "$FLAKE_REF",
+  "cache_signed": false,
+  "cache_key_required": false,
   "package_attrs": [
 $(printf '    "%s",\n' "${PACKAGE_ATTRS[@]}" | sed '$ s/,$//')
   ],
@@ -373,20 +339,25 @@ fi
 echo "[binary-cache] cache size:"
 du -sh "$CACHE_DIR" "$BUNDLE_DIR"
 
-echo "[binary-cache] creating $TARBALL"
-rm -f "$TARBALL" "$SHA_FILE"
-tar -C "$BUNDLE_PARENT" -I "zstd -T0 -$ZSTD_LEVEL" -cf "$TARBALL" "$BUNDLE_NAME"
+if [ "$CREATE_TARBALL" = "1" ]; then
+  echo "[binary-cache] creating $TARBALL"
+  rm -f "$TARBALL" "$SHA_FILE"
+  tar -C "$BUNDLE_PARENT" -I "zstd -T0 -$ZSTD_LEVEL" -cf "$TARBALL" "$BUNDLE_NAME"
 
-(
-  cd "$DIST_DIR"
-  sha256sum "$(basename "$TARBALL")" > "$(basename "$SHA_FILE")"
-)
+  (
+    cd "$DIST_DIR"
+    sha256sum "$(basename "$TARBALL")" > "$(basename "$SHA_FILE")"
+  )
 
-echo "[binary-cache] verifying tarball checksum"
-(
-  cd "$DIST_DIR"
-  sha256sum -c "$(basename "$SHA_FILE")"
-)
+  echo "[binary-cache] verifying tarball checksum"
+  (
+    cd "$DIST_DIR"
+    sha256sum -c "$(basename "$SHA_FILE")"
+  )
 
-echo "[binary-cache] wrote $TARBALL"
-echo "[binary-cache] wrote $SHA_FILE"
+  echo "[binary-cache] wrote $TARBALL"
+  echo "[binary-cache] wrote $SHA_FILE"
+else
+  rm -f "$TARBALL" "$SHA_FILE"
+  echo "[binary-cache] CREATE_TARBALL=0, bundle directory retained for one-click assembly"
+fi

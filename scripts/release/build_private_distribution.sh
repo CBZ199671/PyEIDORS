@@ -216,10 +216,15 @@ for relative in required_root_files:
 
 docs_dir = stage / "docs"
 docs_dir.mkdir(parents=True, exist_ok=True)
-install_doc = root / "docs" / "PRIVATE_RUNTIME_INSTALL.md"
-if install_doc.exists():
-    shutil.copy2(install_doc, stage / "INSTALL.zh.md")
-    shutil.copy2(install_doc, docs_dir / "PRIVATE_RUNTIME_INSTALL.md")
+for doc_name in ("EASY_INSTALL_LINUX.zh.md", "EASY_INSTALL_LINUX.en.md"):
+    source_doc = root / "docs" / doc_name
+    if source_doc.exists():
+        rendered = source_doc.read_text(encoding="utf-8").replace(
+            "@VERSION@", version
+        )
+        (docs_dir / doc_name).write_text(rendered, encoding="utf-8")
+        if doc_name.endswith(".zh.md"):
+            (stage / "INSTALL.zh.md").write_text(rendered, encoding="utf-8")
 
 def ignore_src(path: str, names: list[str]) -> set[str]:
     ignored: set[str] = set()

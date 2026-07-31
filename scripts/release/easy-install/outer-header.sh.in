@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BUNDLE_NAME='@BUNDLE_NAME@'
+EDITION_NAME_ZH='@EDITION_NAME_ZH@'
+VERSION='@VERSION@'
+PAYLOAD_SHA256='@PAYLOAD_SHA256@'
+MIN_TMP_GIB='@MIN_TMP_GIB@'
+
+# @RUNTIME_COMMON@
+
+say() { printf '[PyEIDORS 一键包] %s\n' "$*"; }
+fail() { printf '[PyEIDORS 一键包] 错误：%s\n' "$*" >&2; exit 1; }
+
+install_or_repair_unpack_tools() {
+  local sudo_bin package_bin
+
+  TAR_BIN="$(pyeidors_resolve_host_tool "tar" || true)"
+  ZSTD_BIN="$(pyeidors_resolve_host_tool "zstd" || true)"
+  UNZIP_BIN="$(pyeidors_resolve_host_tool "unzip" || true)"
+  CURL_BIN="$(pyeidors_resolve_host_tool "curl" || true)"
+  SHA256_BIN="$(pyeidors_resolve_host_tool "sha256sum" || true)"
+
+  if [ -n "$TAR_BIN" ] && [ -n "$ZSTD_BIN" ] && [ -n "$UNZIP_BIN" ] \
+    && [ -n "$CURL_BIN" ] && [ -n "$SHA256_BIN" ] \
+    && pyeidors_probe_archive_tools "$TAR_BIN" "$ZSTD_BIN"; then
+    return 0
+  fi
+
+  sudo_bin="$(pyeidors_resolve_host_tool sudo || true)"
+  [ -n "$sudo_bin" ] || fail \
+    "系统压缩工具缺失、损坏或不兼容，而且没有可用 sudo。请让管理员安装 tar、zstd、unzip、curl、ca-certificates、xz。"
+
+  say "系统压缩工具缺失、损坏或过旧；现在从发行版软件源修复（可能询问一次 Linux 登录密码）。"
+  if package_bin="$(pyeidors_resolve_host_tool apt-get || true)" \
+    && [ -n "$package_bin" ]; then
+    "$sudo_bin" "$package_bin" update
+    "$sudo_bin" "$package_bin" install -y \
+      ca-certificates curl tar xz-utils unzip zstd
+  elif package_bin="$(pyeidors_resolve_host_tool dnf || true)" \
+    && [ -n "$package_bin" ]; then
+    "$sudo_bin" "$package_bin" install -y \
+      ca-certificates curl tar xz unzip zstd
+  elif package_bin="$(pyeidors_resolve_host_tool pacman || true)" \
+    && [ -n "$package_bin" ]; then
+    "$sudo_bin" "$package_bin" -Sy --needed --noconfirm \
+      ca-certificates curl tar xz unzip zstd
+  else
+    fail \
+      "无法识别 apt、dnf 或 pacman。请让管理员安装 tar、zstd、unzip、curl、ca-certificates、xz 后重试。"
+  fi
+
+  TAR_BIN="$(pyeidors_resolve_host_tool "tar" || true)"
+  ZSTD_BIN="$(pyeidors_resolve_host_tool "zstd" || true)"
+  UNZIP_BIN="$(pyeidors_resolve_host_tool "unzip" || true)"
+  CURL_BIN="$(pyeidors_resolve_host_tool "curl" || true)"
+  SHA256_BIN="$(pyeidors_resolve_host_tool "sha256sum" || true)"
+  [ -n "$TAR_BIN" ] && [ -n "$ZSTD_BIN" ] && [ -n "$UNZIP_BIN" ] \
+    && [ -n "$CURL_BIN" ] && [ -n "$SHA256_BIN" ] \
+    && pyeidors_probe_archive_tools "$TAR_BIN" "$ZSTD_BIN" \
+    || fail \
+      "自动修复后压缩工具仍不可用。请把本段错误信息交给系统管理员，不要手工替换安装包文件。"
+}
+
+[ "$(uname -s)" = "Linux" ] \
+  || fail "本文件只支持 Linux。Windows 用户请在 WSL2 Ubuntu 中运行。"
+[ "$(uname -m)" = "x86_64" ] \
+  || fail "只支持 x86_64 Linux；当前是 $(uname -m)。"
+[ "$(id -u)" -ne 0 ] \
+  || fail "请使用普通用户运行，不要在命令前添加 sudo。"
+
+pyeidors_safe_system_path
+pyeidors_clean_runtime_environment
+install_or_repair_unpack_tools
+
+if [ "${PYEIDORS_PREREQ_ONLY:-0}" = "1" ]; then
+  say "系统工具、压缩/解压功能探测通过（prerequisite-only）。"
+  exit 0
+fi
+
+AWK_BIN="$(pyeidors_resolve_host_tool awk)" \
+  || fail "系统缺少可用 awk。"
+DF_BIN="$(pyeidors_resolve_host_tool df)" \
+  || fail "系统缺少可用 df。"
+MKTEMP_BIN="$(pyeidors_resolve_host_tool mktemp)" \
+  || fail "系统缺少可用 mktemp。"
+RM_BIN="$(pyeidors_resolve_host_tool rm)" \
+  || fail "系统缺少可用 rm。"
+TAIL_BIN="$(pyeidors_resolve_host_tool tail)" \
+  || fail "系统缺少可用 tail。"
+
+marker_line="$(
+  "$AWK_BIN" '/^__PYEIDORS_PAYLOAD_BELOW__$/ { print NR + 1; exit }' "$0"
+)"
+[ -n "$marker_line" ] || fail "安装包损坏：找不到 payload 标记。"
+
+available_kib="$(
+  "$DF_BIN" -Pk "${TMPDIR:-/tmp}" | "$AWK_BIN" 'NR == 2 { print $4 }'
+)"
+required_kib="$((MIN_TMP_GIB * 1024 * 1024))"
+if [ "$available_kib" -lt "$required_kib" ]; then
+  fail \
+    "临时目录空间不足：至少需要 ${MIN_TMP_GIB} GiB。请按说明设置 TMPDIR 到空间更大的 Linux 分区。"
+fi
+
+work_dir="$("$MKTEMP_BIN" -d "${TMPDIR:-/tmp}/pyeidors-one-click.XXXXXX")"
+payload_file="$work_dir/payload.tar.zst"
+cleanup_outer() { "$RM_BIN" -rf -- "$work_dir"; }
+trap cleanup_outer EXIT INT TERM
+
+say "校验并解压 PyEIDORS $VERSION $EDITION_NAME_ZH，请耐心等待……"
+"$TAIL_BIN" -n +"$marker_line" "$0" > "$payload_file"
+actual_sha256="$("$SHA256_BIN" "$payload_file")"
+actual_sha256="${actual_sha256%% *}"
+[ "$actual_sha256" = "$PAYLOAD_SHA256" ] \
+  || fail "安装包校验失败；文件可能没有下载完整，请重新下载。"
+
+"$ZSTD_BIN" -q -d -c "$payload_file" \
+  | "$TAR_BIN" -C "$work_dir" -xf -
+bundle_dir="$work_dir/$BUNDLE_NAME"
+[ -x "$bundle_dir/install.sh" ] || fail "安装包内容不完整。"
+
+if [ "${PYEIDORS_EXTRACT_ONLY:-0}" = "1" ]; then
+  /bin/bash -n \
+    "$bundle_dir/install.sh" \
+    "$bundle_dir/install-from-local-cache.sh" \
+    "$bundle_dir/runtime-common.sh" \
+    "$bundle_dir/start-pyeidors.sh"
+  say "解包、自校验和脚本语法检查通过（extract-only）。"
+  exit 0
+fi
+
+/bin/bash "$bundle_dir/install.sh"
+exit 0
+__PYEIDORS_PAYLOAD_BELOW__
