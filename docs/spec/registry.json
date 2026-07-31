@@ -1,0 +1,27 @@
+{
+  "schema": "pyeidors-spec-registry-v1",
+  "root_files": [
+    "SPEC.md"
+  ],
+  "invariant_files": [
+    "docs/spec/invariants/core-runtime.md",
+    "docs/spec/invariants/forward-fem.md",
+    "docs/spec/invariants/inverse-reconstruction.md",
+    "docs/spec/invariants/geometry-data.md",
+    "docs/spec/invariants/cache-performance.md",
+    "docs/spec/invariants/interop.md",
+    "docs/spec/invariants/gui.md",
+    "docs/spec/invariants/tooling-validation.md"
+  ],
+  "active_task_files": [
+    "SPEC.md"
+  ],
+  "completed_task_files": [
+    "docs/spec/history/tasks-completed.md"
+  ],
+  "bug_files": [
+    "SPEC.md",
+    "docs/spec/history/bugs.md"
+  ],
+  "id_map": "docs/spec/id-map.tsv"
+}
