@@ -11,6 +11,7 @@ import pytest
 from scripts.benchmarks.cem_multifem_accuracy import (
     ENVIRONMENT_SCHEMA,
     build_environment_report,
+    run_mfem_fixture,
     runtime_environment,
     runtime_paths,
 )
@@ -191,3 +192,26 @@ def test_v683_multifem_derivation_contains_equivalence_and_energy_proof() -> Non
         "augmented and Robin–transconductance methods produce identical",
     ):
         assert marker in text
+
+
+def test_v805_v809_mfem_native_p1_assembly_and_solve(tmp_path: Path) -> None:
+    prefix = Path.home() / ".local/share/pyeidors-cem-multifem"
+    paths = runtime_paths(prefix)
+    if not paths.mfem_library.is_file():
+        pytest.skip("isolated MFEM runtime is not installed")
+    result = run_mfem_fixture(tmp_path, prefix=prefix)
+    assert result["all_pass"] is True
+    assert max(result["analytic_block_relative_frobenius"].values()) < 5.0e-12
+    assert max(result["native_identity_metrics"].values()) < 5.0e-11
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "scripts/benchmarks/mfem_cem_robin.cpp").read_text(
+        encoding="utf-8"
+    )
+    for native_marker in (
+        "DiffusionIntegrator",
+        "MassIntegrator",
+        "BoundaryLFIntegrator",
+        "UMFPackSolver",
+    ):
+        assert native_marker in source

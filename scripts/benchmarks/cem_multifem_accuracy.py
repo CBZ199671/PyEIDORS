@@ -15,9 +15,23 @@ import sys
 import tempfile
 from typing import Any
 
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.benchmarks.cem_block_audit import (
+    assemble_analytic_blocks,
+    build_nonuniform_fixture,
+    prepare_fixture,
+)
+from scripts.benchmarks.cem_multifem_common import validate_native_report
+
 
 ENVIRONMENT_SCHEMA = "cem-multifem-environment-v1"
 REPORT_SCHEMA = "cem-multifem-accuracy-v1"
+BLOCK_TOLERANCE = 5.0e-12
 
 
 def default_environment_prefix() -> Path:
@@ -204,10 +218,158 @@ def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
     path.write_text(rendered, encoding="utf-8")
 
 
+def _run_checked(
+    command: list[str], *, env: dict[str, str], context: str
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=120,
+    )
+    if completed.returncode != 0:
+        detail = "\n".join(
+            part.strip()
+            for part in (completed.stdout, completed.stderr)
+            if part.strip()
+        )
+        raise RuntimeError(
+            f"{context} failed with code {completed.returncode}: {detail}"
+        )
+    return completed
+
+
+def _relative_frobenius(actual: Any, expected: Any) -> float:
+    actual_array = np.asarray(actual, dtype=np.float64)
+    expected_array = np.asarray(expected, dtype=np.float64)
+    numerator = float(np.linalg.norm(actual_array - expected_array, ord="fro"))
+    denominator = max(
+        float(np.linalg.norm(expected_array, ord="fro")), np.finfo(float).tiny
+    )
+    return numerator / denominator
+
+
+def build_mfem_adapter(
+    build_dir: Path, *, prefix: Path | None = None
+) -> tuple[Path, RuntimePaths, dict[str, str]]:
+    """Compile the native MFEM adapter against the isolated runtime."""
+
+    paths = runtime_paths(prefix)
+    env = runtime_environment(paths)
+    source = ROOT / "scripts/benchmarks/mfem_cem_robin.cpp"
+    executable = build_dir / "mfem_cem_robin"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    cmake_source = build_dir / "cmake_source"
+    cmake_build = build_dir / "cmake_build"
+    cmake_source.mkdir(parents=True, exist_ok=True)
+    (cmake_source / "CMakeLists.txt").write_text(
+        "\n".join(
+            (
+                "cmake_minimum_required(VERSION 3.22)",
+                "project(mfem_cem_robin LANGUAGES CXX)",
+                "find_package(MFEM 4.9.0 EXACT CONFIG REQUIRED)",
+                f'add_executable(mfem_cem_robin "{source}")',
+                "target_compile_features(mfem_cem_robin PRIVATE cxx_std_17)",
+                "target_compile_options(mfem_cem_robin PRIVATE -Wall -Wextra)",
+                "target_link_libraries(mfem_cem_robin PRIVATE mfem)",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    _run_checked(
+        [
+            "cmake",
+            "-S",
+            str(cmake_source),
+            "-B",
+            str(cmake_build),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DMFEM_DIR={paths.mfem_prefix / 'lib/cmake/mfem'}",
+        ],
+        env=env,
+        context="MFEM adapter CMake configuration",
+    )
+    _run_checked(
+        ["cmake", "--build", str(cmake_build), "--parallel", "2"],
+        env=env,
+        context="MFEM adapter compilation",
+    )
+    built_executable = cmake_build / "mfem_cem_robin"
+    if not built_executable.is_file():
+        raise RuntimeError("MFEM adapter build did not produce the expected executable")
+    executable.write_bytes(built_executable.read_bytes())
+    executable.chmod(0o755)
+    return executable, paths, env
+
+
+def run_mfem_fixture(output_dir: Path, *, prefix: Path | None = None) -> dict[str, Any]:
+    """Run and independently validate MFEM on the shared nonuniform P1 fixture."""
+
+    output_dir = output_dir.resolve()
+    metadata = prepare_fixture(output_dir)
+    fixture = build_nonuniform_fixture()
+    analytic_blocks, _ = assemble_analytic_blocks(fixture)
+    current_path = output_dir / "common_mesh/cem_block_audit_currents.csv"
+    np.savetxt(current_path, fixture.currents, delimiter=",", fmt="%.17g")
+    report_path = output_dir / "MFEM_native_report.json"
+    executable, _, env = build_mfem_adapter(
+        output_dir / "native_build/mfem", prefix=prefix
+    )
+    command = [
+        str(executable),
+        str(metadata["common_msh"]),
+        str(report_path),
+        fixture.mesh_fingerprint,
+        f"{fixture.conductivity:.17g}",
+        ",".join(f"{value:.17g}" for value in fixture.contact_impedance),
+        str(current_path),
+    ]
+    _run_checked(command, env=env, context="MFEM native Robin solve")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    fixture_contract = {
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "currents": fixture.currents,
+    }
+    identity_metrics = validate_native_report(
+        report, fixture_contract, expected_solver="MFEM"
+    )
+    block_metrics = {
+        key: _relative_frobenius(report["blocks"][key], analytic_blocks[key])
+        for key in ("K", "B", "C_plus", "D", "A_R")
+    }
+    failures = {
+        key: value for key, value in block_metrics.items() if value > BLOCK_TOLERANCE
+    }
+    if failures:
+        raise RuntimeError(f"MFEM analytic P1 block comparison failed: {failures}")
+    validation = {
+        "schema": REPORT_SCHEMA,
+        "solver": "MFEM",
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "native_identity_metrics": identity_metrics,
+        "analytic_block_relative_frobenius": block_metrics,
+        "all_pass": True,
+        "native_report": str(report_path),
+    }
+    _write_json(output_dir / "MFEM_validation.json", validation)
+    return validation
+
+
 def _doctor(args: argparse.Namespace) -> int:
     report = build_environment_report(args.prefix)
     _write_json(args.output_json, report)
     return 0 if report["ok"] or not args.strict else 1
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.solver != "MFEM":
+        raise NotImplementedError(f"{args.solver} adapter is not implemented yet")
+    report = run_mfem_fixture(args.output_dir, prefix=args.prefix)
+    _write_json(None, report)
+    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -218,6 +380,11 @@ def _parser() -> argparse.ArgumentParser:
     doctor.add_argument("--output-json", type=Path)
     doctor.add_argument("--strict", action="store_true")
     doctor.set_defaults(handler=_doctor)
+    run = subparsers.add_parser("run", help="run one native solver on the P1 fixture")
+    run.add_argument("--solver", choices=("MFEM", "FreeFEM", "GetFEM"), required=True)
+    run.add_argument("--prefix", type=Path)
+    run.add_argument("--output-dir", type=Path, required=True)
+    run.set_defaults(handler=_run)
     return parser
 
 
