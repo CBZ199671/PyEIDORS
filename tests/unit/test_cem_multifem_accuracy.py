@@ -6,11 +6,24 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from scripts.benchmarks.cem_multifem_accuracy import (
     ENVIRONMENT_SCHEMA,
     build_environment_report,
     runtime_environment,
     runtime_paths,
+)
+from scripts.benchmarks.cem_multifem_common import (
+    FORMULATION_ROBIN,
+    PRIMARY_METHODS,
+    REPORT_SCHEMA,
+    solve_robin_from_blocks,
+    validate_native_report,
+)
+from scripts.benchmarks.cem_block_audit import (
+    assemble_analytic_blocks,
+    build_nonuniform_fixture,
 )
 
 
@@ -77,3 +90,104 @@ def test_v808_runtime_environment_drops_nix_and_python_contamination(
     assert "PYTHONHOME" not in env
     assert "VIRTUAL_ENV" not in env
     assert "CONDA_PREFIX" not in env
+
+
+def _valid_native_report() -> tuple[dict, dict]:
+    fixture = build_nonuniform_fixture()
+    blocks, _ = assemble_analytic_blocks(fixture)
+    solution = solve_robin_from_blocks(
+        K=blocks["K"],
+        B=blocks["B"],
+        C_plus=blocks["C_plus"],
+        D=blocks["D"],
+        currents=fixture.currents,
+    )
+    fixture_payload = {
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "currents": fixture.currents,
+    }
+    report = {
+        "schema": REPORT_SCHEMA,
+        "solver": "MFEM",
+        "formulation": FORMULATION_ROBIN,
+        "implementation": {"native_assembly": True},
+        "discretization": {
+            "mesh_fingerprint": fixture.mesh_fingerprint,
+            "mesh_import_verified": True,
+            "potential_order": 1,
+            "geometry_order": 1,
+            "scalar_dtype": "float64",
+            "imported_nodes": fixture.nodes.tolist(),
+            "imported_cells_zero_based": fixture.cells.tolist(),
+            "imported_tagged_boundary_edges_zero_based": (
+                fixture.tagged_edges.tolist()
+            ),
+        },
+        "physical_config": {"currents": fixture.currents.tolist()},
+        "blocks": {
+            key: blocks[key].tolist() for key in ("K", "B", "C_plus", "D", "A_R")
+        },
+        "solution": {
+            "T": solution.T.tolist(),
+            "reduced_map": solution.reduced_map.tolist(),
+            "body_potential": solution.body_potential.tolist(),
+            "electrode_voltage": solution.electrode_voltage.tolist(),
+        },
+    }
+    return report, fixture_payload
+
+
+def test_v806_primary_method_set_is_exactly_the_registered_six() -> None:
+    assert [(method.solver, method.formulation) for method in PRIMARY_METHODS] == [
+        ("EIDORS", "classic_augmented"),
+        ("PyEIDORS-DOLFINx", "robin_transconductance"),
+        ("NGSolve", "robin_transconductance"),
+        ("MFEM", "robin_transconductance"),
+        ("FreeFEM", "robin_transconductance"),
+        ("GetFEM", "robin_transconductance"),
+    ]
+
+
+def test_v805_native_report_rebuilds_robin_identities() -> None:
+    report, fixture = _valid_native_report()
+    metrics = validate_native_report(report, fixture, expected_solver="MFEM")
+    assert max(metrics.values()) < 5.0e-12
+
+
+def test_v805_native_report_rejects_copied_hash_or_non_p1() -> None:
+    report, fixture = _valid_native_report()
+    report["discretization"]["imported_nodes"][0][0] += 0.0625
+    with pytest.raises(ValueError, match="declared fingerprint"):
+        validate_native_report(report, fixture, expected_solver="MFEM")
+
+    report, fixture = _valid_native_report()
+    report["discretization"]["potential_order"] = 2
+    with pytest.raises(ValueError, match="requires P1"):
+        validate_native_report(report, fixture, expected_solver="MFEM")
+
+
+def test_v806_accuracy_report_rejects_timing_and_wrong_formulation() -> None:
+    report, fixture = _valid_native_report()
+    report["diagnostics"] = {"elapsed_seconds": 0.01}
+    with pytest.raises(ValueError, match="must not contain timing"):
+        validate_native_report(report, fixture, expected_solver="MFEM")
+
+    report, fixture = _valid_native_report()
+    report["formulation"] = "classic_augmented"
+    with pytest.raises(ValueError, match="formulation mismatch"):
+        validate_native_report(report, fixture, expected_solver="MFEM")
+
+
+def test_v683_multifem_derivation_contains_equivalence_and_energy_proof() -> None:
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "docs/benchmarks/cem_multifem_robin_derivation.md").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "T=D-C_+^TA_R^{-1}C_+",
+        "U^TTU",
+        "Q^TTQ",
+        "symmetric positive definite",
+        "augmented and Robin–transconductance methods produce identical",
+    ):
+        assert marker in text
