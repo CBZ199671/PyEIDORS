@@ -427,6 +427,67 @@ def run_freefem_fixture(
     return validation
 
 
+def run_getfem_fixture(
+    output_dir: Path, *, prefix: Path | None = None
+) -> dict[str, Any]:
+    """Run and independently validate GetFEM on the shared nonuniform fixture."""
+
+    output_dir = output_dir.resolve()
+    paths = runtime_paths(prefix)
+    env = runtime_environment(paths)
+    metadata = prepare_fixture(output_dir)
+    fixture = build_nonuniform_fixture()
+    analytic_blocks, _ = assemble_analytic_blocks(fixture)
+    config_path = output_dir / "common_mesh/GetFEM_fixture_config.json"
+    report_path = output_dir / "GetFEM_native_report.json"
+    _write_json(
+        config_path,
+        {
+            "mesh": str(metadata["common_msh"]),
+            "mesh_fingerprint": fixture.mesh_fingerprint,
+            "conductivity": fixture.conductivity,
+            "contact_impedance": fixture.contact_impedance.tolist(),
+            "currents": fixture.currents.tolist(),
+        },
+    )
+    script = ROOT / "scripts/benchmarks/getfem_cem_robin.py"
+    command = [
+        str(paths.getfem_python),
+        str(script),
+        str(config_path),
+        str(report_path),
+    ]
+    _run_checked(command, env=env, context="GetFEM native Robin solve")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    fixture_contract = {
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "currents": fixture.currents,
+    }
+    identity_metrics = validate_native_report(
+        report, fixture_contract, expected_solver="GetFEM"
+    )
+    block_metrics = {
+        key: _relative_frobenius(report["blocks"][key], analytic_blocks[key])
+        for key in ("K", "B", "C_plus", "D", "A_R")
+    }
+    failures = {
+        key: value for key, value in block_metrics.items() if value > BLOCK_TOLERANCE
+    }
+    if failures:
+        raise RuntimeError(f"GetFEM analytic P1 block comparison failed: {failures}")
+    validation = {
+        "schema": REPORT_SCHEMA,
+        "solver": "GetFEM",
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "native_identity_metrics": identity_metrics,
+        "analytic_block_relative_frobenius": block_metrics,
+        "all_pass": True,
+        "native_report": str(report_path),
+    }
+    _write_json(output_dir / "GetFEM_validation.json", validation)
+    return validation
+
+
 def _doctor(args: argparse.Namespace) -> int:
     report = build_environment_report(args.prefix)
     _write_json(args.output_json, report)
@@ -438,6 +499,8 @@ def _run(args: argparse.Namespace) -> int:
         report = run_mfem_fixture(args.output_dir, prefix=args.prefix)
     elif args.solver == "FreeFEM":
         report = run_freefem_fixture(args.output_dir, prefix=args.prefix)
+    elif args.solver == "GetFEM":
+        report = run_getfem_fixture(args.output_dir, prefix=args.prefix)
     else:
         raise NotImplementedError(f"{args.solver} adapter is not implemented yet")
     _write_json(None, report)

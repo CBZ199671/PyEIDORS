@@ -12,6 +12,7 @@ from scripts.benchmarks.cem_multifem_accuracy import (
     ENVIRONMENT_SCHEMA,
     build_environment_report,
     run_freefem_fixture,
+    run_getfem_fixture,
     run_mfem_fixture,
     runtime_environment,
     runtime_paths,
@@ -246,3 +247,27 @@ def test_v805_v810_freefem_native_p1_assembly_and_solve(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert "libfreefem++=4.9+dfsg1-2build1" in setup
+
+
+def test_v805_getfem_native_p1_assembly_and_solve(tmp_path: Path) -> None:
+    prefix = Path.home() / ".local/share/pyeidors-cem-multifem"
+    paths = runtime_paths(prefix)
+    if not paths.getfem_pythonpath.joinpath("getfem").is_dir():
+        pytest.skip("isolated GetFEM runtime is not installed")
+    result = run_getfem_fixture(tmp_path, prefix=prefix)
+    assert result["all_pass"] is True
+    assert max(result["analytic_block_relative_frobenius"].values()) < 5.0e-12
+    assert max(result["native_identity_metrics"].values()) < 5.0e-11
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "scripts/benchmarks/getfem_cem_robin.py").read_text(
+        encoding="utf-8"
+    )
+    for native_marker in (
+        'getfem.Mesh("import", "gmsh", mesh_path)',
+        "mesh_fem.set_classical_fem(1)",
+        "getfem.asm_generic(",
+        "getfem.asm_mass_matrix(",
+        "getfem.linsolve_mumps(",
+    ):
+        assert native_marker in source
