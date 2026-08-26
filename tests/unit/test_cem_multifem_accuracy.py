@@ -11,6 +11,7 @@ import pytest
 from scripts.benchmarks.cem_multifem_accuracy import (
     ENVIRONMENT_SCHEMA,
     build_environment_report,
+    run_freefem_fixture,
     run_mfem_fixture,
     runtime_environment,
     runtime_paths,
@@ -215,3 +216,33 @@ def test_v805_v809_mfem_native_p1_assembly_and_solve(tmp_path: Path) -> None:
         "UMFPackSolver",
     ):
         assert native_marker in source
+
+
+def test_v805_v810_freefem_native_p1_assembly_and_solve(tmp_path: Path) -> None:
+    prefix = Path.home() / ".local/share/pyeidors-cem-multifem"
+    paths = runtime_paths(prefix)
+    plugin = paths.deb_root / "usr/lib/freefem++/gmsh.so"
+    if not paths.freefem.is_file() or not plugin.is_file():
+        pytest.skip("isolated FreeFEM runtime with Gmsh plugin is not installed")
+    result = run_freefem_fixture(tmp_path, prefix=prefix)
+    assert result["all_pass"] is True
+    assert max(result["analytic_block_relative_frobenius"].values()) < 5.0e-12
+    assert max(result["native_identity_metrics"].values()) < 5.0e-11
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "scripts/benchmarks/freefem_cem_robin.edp").read_text(
+        encoding="utf-8"
+    )
+    for native_marker in (
+        "gmshload(meshPath, renum=0)",
+        "stiffnessForm(Vh, Vh)",
+        "boundaryMassForm(Vh, Vh)",
+        "AR^-1 * rhs",
+        "reducedSparse^-1 * reducedRhs",
+    ):
+        assert native_marker in source
+
+    setup = (root / "scripts/benchmarks/setup_cem_multifem_env.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "libfreefem++=4.9+dfsg1-2build1" in setup

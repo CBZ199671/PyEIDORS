@@ -10,10 +10,12 @@ MFEM_ARCHIVE_URL="https://github.com/mfem/mfem/archive/refs/tags/v${MFEM_VERSION
 MFEM_BUILD_JOBS="${PYEIDORS_CEM_MFEM_BUILD_JOBS:-2}"
 
 FREEFEM_PACKAGE="freefem++=4.9+dfsg1-2build1"
+FREEFEM_LIBRARY_PACKAGE="libfreefem++=4.9+dfsg1-2build1"
 GETFEM_PYTHON_PACKAGE="python3-getfem++=5.3+dfsg1-4ubuntu1"
 DEB_PACKAGES=(
   "freeglut3=2.8.1-6"
   "${FREEFEM_PACKAGE}"
+  "${FREEFEM_LIBRARY_PACKAGE}"
   "libmumps-seq-5.4=5.4.1-2"
   "libqhull8.0=2020.2-4"
   "libmetis5=5.1.0.dfsg-7build2"
@@ -100,6 +102,7 @@ write_environment_metadata() {
     printf 'mfem_source_url\t%s\n' "${MFEM_ARCHIVE_URL}"
     printf 'mfem_source_sha256\t%s\n' "${MFEM_ARCHIVE_SHA256}"
     printf 'freefem_ubuntu_package\t%s\n' "${FREEFEM_PACKAGE}"
+    printf 'freefem_library_ubuntu_package\t%s\n' "${FREEFEM_LIBRARY_PACKAGE}"
     printf 'getfem_ubuntu_package\t%s\n' "${GETFEM_PYTHON_PACKAGE}"
     printf 'mfem_prefix\t%s\n' "${MFEM_INSTALL_DIR}"
     printf 'mfem_build_jobs\t%s\n' "${MFEM_BUILD_JOBS}"

@@ -149,7 +149,10 @@ def _metadata(path: Path) -> dict[str, str]:
 def _freefem_probe(paths: RuntimePaths, env: dict[str, str]) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="cem-freefem-doctor-") as directory:
         script = Path(directory) / "doctor.edp"
-        script.write_text('cout << "freefem-ok" << endl;\n', encoding="utf-8")
+        script.write_text(
+            'load "gmsh"\ncout << "freefem-gmsh-ok" << endl;\n',
+            encoding="utf-8",
+        )
         return _command_version(
             [str(paths.freefem), "-v", "0", str(script)],
             env,
@@ -358,6 +361,72 @@ def run_mfem_fixture(output_dir: Path, *, prefix: Path | None = None) -> dict[st
     return validation
 
 
+def run_freefem_fixture(
+    output_dir: Path, *, prefix: Path | None = None
+) -> dict[str, Any]:
+    """Run and independently validate FreeFEM on the shared nonuniform fixture."""
+
+    output_dir = output_dir.resolve()
+    paths = runtime_paths(prefix)
+    env = runtime_environment(paths)
+    metadata = prepare_fixture(output_dir)
+    fixture = build_nonuniform_fixture()
+    analytic_blocks, _ = assemble_analytic_blocks(fixture)
+    current_path = output_dir / "common_mesh/cem_block_audit_currents.txt"
+    impedance_path = output_dir / "common_mesh/cem_block_audit_impedance.txt"
+    np.savetxt(current_path, fixture.currents, fmt="%.17g")
+    np.savetxt(impedance_path, fixture.contact_impedance, fmt="%.17g")
+    report_path = output_dir / "FreeFEM_native_report.json"
+    script = ROOT / "scripts/benchmarks/freefem_cem_robin.edp"
+    env.update(
+        {
+            "PYEIDORS_CEM_MESH": str(metadata["common_msh"]),
+            "PYEIDORS_CEM_OUTPUT": str(report_path),
+            "PYEIDORS_CEM_FINGERPRINT": fixture.mesh_fingerprint,
+            "PYEIDORS_CEM_CONDUCTIVITY": f"{fixture.conductivity:.17g}",
+            "PYEIDORS_CEM_ELECTRODES": str(fixture.contact_impedance.size),
+            "PYEIDORS_CEM_DRIVES": str(fixture.currents.shape[1]),
+            "PYEIDORS_CEM_IMPEDANCE": str(impedance_path),
+            "PYEIDORS_CEM_CURRENTS": str(current_path),
+        }
+    )
+    command = [
+        str(paths.freefem),
+        "-v",
+        "0",
+        str(script),
+    ]
+    _run_checked(command, env=env, context="FreeFEM native Robin solve")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    fixture_contract = {
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "currents": fixture.currents,
+    }
+    identity_metrics = validate_native_report(
+        report, fixture_contract, expected_solver="FreeFEM"
+    )
+    block_metrics = {
+        key: _relative_frobenius(report["blocks"][key], analytic_blocks[key])
+        for key in ("K", "B", "C_plus", "D", "A_R")
+    }
+    failures = {
+        key: value for key, value in block_metrics.items() if value > BLOCK_TOLERANCE
+    }
+    if failures:
+        raise RuntimeError(f"FreeFEM analytic P1 block comparison failed: {failures}")
+    validation = {
+        "schema": REPORT_SCHEMA,
+        "solver": "FreeFEM",
+        "mesh_fingerprint": fixture.mesh_fingerprint,
+        "native_identity_metrics": identity_metrics,
+        "analytic_block_relative_frobenius": block_metrics,
+        "all_pass": True,
+        "native_report": str(report_path),
+    }
+    _write_json(output_dir / "FreeFEM_validation.json", validation)
+    return validation
+
+
 def _doctor(args: argparse.Namespace) -> int:
     report = build_environment_report(args.prefix)
     _write_json(args.output_json, report)
@@ -365,9 +434,12 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    if args.solver != "MFEM":
+    if args.solver == "MFEM":
+        report = run_mfem_fixture(args.output_dir, prefix=args.prefix)
+    elif args.solver == "FreeFEM":
+        report = run_freefem_fixture(args.output_dir, prefix=args.prefix)
+    else:
         raise NotImplementedError(f"{args.solver} adapter is not implemented yet")
-    report = run_mfem_fixture(args.output_dir, prefix=args.prefix)
     _write_json(None, report)
     return 0
 

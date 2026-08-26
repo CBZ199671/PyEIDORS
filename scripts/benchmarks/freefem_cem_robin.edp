@@ -1,0 +1,294 @@
+// Native FreeFEM P1 Robin--transconductance CEM adapter.
+// Python launches and verifies this script but never assembles candidate blocks.
+
+load "gmsh"
+load "shell"
+
+// Ubuntu's 4.9 build does not expose ARGV to scripts. The launcher supplies a
+// sanitized per-process environment, which is also safe for paths with spaces.
+string meshPath = getenv("PYEIDORS_CEM_MESH");
+string outputPath = getenv("PYEIDORS_CEM_OUTPUT");
+string fingerprint = getenv("PYEIDORS_CEM_FINGERPRINT");
+string impedancePath = getenv("PYEIDORS_CEM_IMPEDANCE");
+string currentsPath = getenv("PYEIDORS_CEM_CURRENTS");
+real conductivity = strtod(getenv("PYEIDORS_CEM_CONDUCTIVITY"));
+int electrodeCount = strtol(getenv("PYEIDORS_CEM_ELECTRODES"));
+int driveCount = strtol(getenv("PYEIDORS_CEM_DRIVES"));
+if (meshPath == "" || outputPath == "" || fingerprint == "" ||
+    impedancePath == "" || currentsPath == "" || conductivity <= 0.0 ||
+    electrodeCount < 2 || driveCount < 1)
+{
+    cerr << "FreeFEM CEM adapter received invalid arguments" << endl;
+    exit(2);
+}
+
+real[int] contactImpedance(electrodeCount);
+ifstream impedanceInput(impedancePath);
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+{
+    impedanceInput >> contactImpedance[electrode];
+    if (contactImpedance[electrode] <= 0.0)
+    {
+        cerr << "contact impedances must be positive" << endl;
+        exit(2);
+    }
+}
+
+real[int,int] currents(electrodeCount, driveCount);
+ifstream currentsInput(currentsPath);
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+    for (int drive = 0; drive < driveCount; ++drive)
+        currentsInput >> currents(electrode, drive);
+for (int drive = 0; drive < driveCount; ++drive)
+{
+    real totalCurrent = 0.0;
+    for (int electrode = 0; electrode < electrodeCount; ++electrode)
+        totalCurrent += currents(electrode, drive);
+    if (abs(totalCurrent) > 1.0e-13)
+    {
+        cerr << "current pattern is not balanced" << endl;
+        exit(2);
+    }
+}
+
+// renum=0 is essential: for scalar P1, imported vertex and DOF indices agree.
+mesh Th = gmshload(meshPath, renum=0);
+fespace Vh(Th, P1);
+int nodeCount = Vh.ndof;
+if (nodeCount != Th.nv)
+{
+    cerr << "P1 DOF count differs from imported vertex count" << endl;
+    exit(2);
+}
+Vh importedX = x, importedY = y;
+for (int node = 0; node < nodeCount; ++node)
+{
+    if (abs(importedX[][node] - Th(node).x) > 1.0e-14 ||
+        abs(importedY[][node] - Th(node).y) > 1.0e-14)
+    {
+        cerr << "FreeFEM P1 vertex-to-DOF ordering is not identity" << endl;
+        exit(2);
+    }
+}
+
+real[int] inverseContactByLabel(electrodeCount + 1);
+inverseContactByLabel = 0.0;
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+    inverseContactByLabel[electrode] = 1.0 / contactImpedance[electrode];
+
+varf stiffnessForm(u, v) = int2d(Th)(
+    conductivity * (dx(u) * dx(v) + dy(u) * dy(v))
+);
+varf boundaryMassForm(u, v) = int1d(Th)(
+    inverseContactByLabel[label - 1] * u * v
+);
+matrix K = stiffnessForm(Vh, Vh);
+matrix B = boundaryMassForm(Vh, Vh);
+matrix AR = K + B;
+set(AR, solver=sparsesolver);
+
+real[int] activeElectrodeByLabel(electrodeCount + 1);
+activeElectrodeByLabel = 0.0;
+varf couplingForm(unused, v) = int1d(Th)(
+    activeElectrodeByLabel[label - 1] * v
+);
+real[int,int] Cplus(nodeCount, electrodeCount);
+real[int,int] D(electrodeCount, electrodeCount);
+Cplus = 0.0;
+D = 0.0;
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+{
+    activeElectrodeByLabel = 0.0;
+    activeElectrodeByLabel[electrode] = 1.0 / contactImpedance[electrode];
+    real[int] couplingColumn = couplingForm(0, Vh);
+    real electrodeDiagonal = 0.0;
+    for (int node = 0; node < nodeCount; ++node)
+    {
+        Cplus(node, electrode) = couplingColumn[node];
+        electrodeDiagonal += couplingColumn[node];
+    }
+    D(electrode, electrode) = electrodeDiagonal;
+}
+
+// Exported dense blocks are obtained by applying FreeFEM's native sparse forms.
+real[int,int] Kdense(nodeCount, nodeCount);
+real[int,int] Bdense(nodeCount, nodeCount);
+real[int,int] ARdense(nodeCount, nodeCount);
+real[int] unitColumn(nodeCount), appliedColumn(nodeCount);
+for (int column = 0; column < nodeCount; ++column)
+{
+    unitColumn = 0.0;
+    unitColumn[column] = 1.0;
+    appliedColumn = K * unitColumn;
+    for (int row = 0; row < nodeCount; ++row)
+        Kdense(row, column) = appliedColumn[row];
+    appliedColumn = B * unitColumn;
+    for (int row = 0; row < nodeCount; ++row)
+        Bdense(row, column) = appliedColumn[row];
+    appliedColumn = AR * unitColumn;
+    for (int row = 0; row < nodeCount; ++row)
+        ARdense(row, column) = appliedColumn[row];
+}
+
+real[int,int] response(nodeCount, electrodeCount);
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+{
+    real[int] rhs(nodeCount);
+    for (int node = 0; node < nodeCount; ++node)
+        rhs[node] = Cplus(node, electrode);
+    real[int] solved = AR^-1 * rhs;
+    for (int node = 0; node < nodeCount; ++node)
+        response(node, electrode) = solved[node];
+}
+
+real[int,int] transconductance(electrodeCount, electrodeCount);
+transconductance = D;
+for (int left = 0; left < electrodeCount; ++left)
+    for (int right = 0; right < electrodeCount; ++right)
+        for (int node = 0; node < nodeCount; ++node)
+            transconductance(left, right) -=
+                Cplus(node, left) * response(node, right);
+
+int reducedCount = electrodeCount - 1;
+real[int,int] basis(electrodeCount, reducedCount);
+basis = 0.0;
+for (int column = 1; column < electrodeCount; ++column)
+{
+    real scale = sqrt(column * (column + 1.0));
+    for (int row = 0; row < column; ++row)
+        basis(row, column - 1) = 1.0 / scale;
+    basis(column, column - 1) = -column / scale;
+}
+
+real[int,int] reducedMap(reducedCount, reducedCount);
+reducedMap = 0.0;
+for (int row = 0; row < reducedCount; ++row)
+    for (int column = 0; column < reducedCount; ++column)
+        for (int left = 0; left < electrodeCount; ++left)
+            for (int right = 0; right < electrodeCount; ++right)
+                reducedMap(row, column) += basis(left, row) *
+                    transconductance(left, right) * basis(right, column);
+
+int tripletCount = reducedCount * reducedCount;
+int[int] reducedRows(tripletCount), reducedColumns(tripletCount);
+real[int] reducedValues(tripletCount);
+int triplet = 0;
+for (int row = 0; row < reducedCount; ++row)
+    for (int column = 0; column < reducedCount; ++column)
+    {
+        reducedRows[triplet] = row;
+        reducedColumns[triplet] = column;
+        reducedValues[triplet] = reducedMap(row, column);
+        ++triplet;
+    }
+matrix reducedSparse = [reducedRows, reducedColumns, reducedValues];
+set(reducedSparse, solver=sparsesolver);
+
+real[int,int] electrodeVoltage(electrodeCount, driveCount);
+real[int,int] bodyPotential(nodeCount, driveCount);
+electrodeVoltage = 0.0;
+bodyPotential = 0.0;
+for (int drive = 0; drive < driveCount; ++drive)
+{
+    real[int] reducedRhs(reducedCount);
+    reducedRhs = 0.0;
+    for (int row = 0; row < reducedCount; ++row)
+        for (int electrode = 0; electrode < electrodeCount; ++electrode)
+            reducedRhs[row] += basis(electrode, row) * currents(electrode, drive);
+    real[int] coordinates = reducedSparse^-1 * reducedRhs;
+    for (int electrode = 0; electrode < electrodeCount; ++electrode)
+        for (int coordinate = 0; coordinate < reducedCount; ++coordinate)
+            electrodeVoltage(electrode, drive) +=
+                basis(electrode, coordinate) * coordinates[coordinate];
+
+    real[int] bodyRhs(nodeCount);
+    bodyRhs = 0.0;
+    for (int node = 0; node < nodeCount; ++node)
+        for (int electrode = 0; electrode < electrodeCount; ++electrode)
+            bodyRhs[node] += Cplus(node, electrode) *
+                electrodeVoltage(electrode, drive);
+    real[int] bodySolved = AR^-1 * bodyRhs;
+    for (int node = 0; node < nodeCount; ++node)
+        bodyPotential(node, drive) = bodySolved[node];
+}
+
+ofstream output(outputPath);
+output.precision(17);
+
+macro WriteDense(MatrixValue, RowCount, ColumnCount)
+{
+    output << "[";
+    for (int writeRow = 0; writeRow < RowCount; ++writeRow)
+    {
+        if (writeRow) output << ",";
+        output << "[";
+        for (int writeColumn = 0; writeColumn < ColumnCount; ++writeColumn)
+        {
+            if (writeColumn) output << ",";
+            output << MatrixValue(writeRow, writeColumn);
+        }
+        output << "]";
+    }
+    output << "]";
+} //
+
+output << "{\"schema\":\"cem-multifem-accuracy-v1\","
+       << "\"solver\":\"FreeFEM\","
+       << "\"formulation\":\"robin_transconductance\","
+       << "\"implementation\":{\"native_assembly\":true,"
+       << "\"framework_version\":\"4.9\","
+       << "\"body_solver\":\"sparsesolver\","
+       << "\"electrode_solver\":\"sparsesolver\"},"
+       << "\"discretization\":{\"mesh_fingerprint\":\"" << fingerprint
+       << "\",\"mesh_import_verified\":true,\"potential_order\":1,"
+       << "\"geometry_order\":1,\"scalar_dtype\":\"float64\","
+       << "\"imported_nodes\":[";
+for (int node = 0; node < Th.nv; ++node)
+{
+    if (node) output << ",";
+    output << "[" << Th(node).x << "," << Th(node).y << "]";
+}
+output << "],\"imported_cells_zero_based\":[";
+for (int cell = 0; cell < Th.nt; ++cell)
+{
+    if (cell) output << ",";
+    output << "[" << Th[cell][0] << "," << Th[cell][1] << "," << Th[cell][2]
+           << "]";
+}
+output << "],\"imported_tagged_boundary_edges_zero_based\":[";
+for (int edge = 0; edge < Th.nbe; ++edge)
+{
+    if (edge) output << ",";
+    int boundaryLabel = Th.be(edge).label;
+    int electrodeLabel = boundaryLabel <= electrodeCount ? boundaryLabel : 0;
+    output << "[" << Th.be(edge)[0] << "," << Th.be(edge)[1] << ","
+           << electrodeLabel << "]";
+}
+output << "]},\"physical_config\":{\"conductivity\":" << conductivity
+       << ",\"contact_impedance\":[";
+for (int electrode = 0; electrode < electrodeCount; ++electrode)
+{
+    if (electrode) output << ",";
+    output << contactImpedance[electrode];
+}
+output << "],\"currents\":";
+WriteDense(currents, electrodeCount, driveCount)
+output << "},\"blocks\":{\"K\":";
+WriteDense(Kdense, nodeCount, nodeCount)
+output << ",\"B\":";
+WriteDense(Bdense, nodeCount, nodeCount)
+output << ",\"C_plus\":";
+WriteDense(Cplus, nodeCount, electrodeCount)
+output << ",\"D\":";
+WriteDense(D, electrodeCount, electrodeCount)
+output << ",\"A_R\":";
+WriteDense(ARdense, nodeCount, nodeCount)
+output << "},\"solution\":{\"T\":";
+WriteDense(transconductance, electrodeCount, electrodeCount)
+output << ",\"reduced_map\":";
+WriteDense(reducedMap, reducedCount, reducedCount)
+output << ",\"body_potential\":";
+WriteDense(bodyPotential, nodeCount, driveCount)
+output << ",\"electrode_voltage\":";
+WriteDense(electrodeVoltage, electrodeCount, driveCount)
+output << "}}" << endl;
