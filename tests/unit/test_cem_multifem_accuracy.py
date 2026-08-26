@@ -6,10 +6,14 @@ import os
 from pathlib import Path
 import subprocess
 
+import numpy as np
 import pytest
 
 from scripts.benchmarks.cem_multifem_accuracy import (
     ENVIRONMENT_SCHEMA,
+    _accuracy_only_guard,
+    _balanced_adjacent_currents,
+    _native_method_result,
     build_environment_report,
     run_freefem_fixture,
     run_getfem_fixture,
@@ -179,6 +183,34 @@ def test_v806_accuracy_report_rejects_timing_and_wrong_formulation() -> None:
     report["formulation"] = "classic_augmented"
     with pytest.raises(ValueError, match="formulation mismatch"):
         validate_native_report(report, fixture, expected_solver="MFEM")
+
+
+def test_v811_current_and_voltage_arrays_are_electrode_by_rhs() -> None:
+    currents = _balanced_adjacent_currents(4)
+    expected = np.asarray(
+        [
+            [1.0, 0.0, 0.0, -1.0],
+            [-1.0, 1.0, 0.0, 0.0],
+            [0.0, -1.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0, 1.0],
+        ]
+    )
+    assert np.array_equal(currents, expected)
+
+    nonsymmetric_voltage = np.asarray([[1.0, 2.0], [3.0, 5.0], [7.0, 11.0]])
+    result = _native_method_result(
+        {"solution": {"electrode_voltage": nonsymmetric_voltage.tolist()}},
+        truth_electrode_rhs=nonsymmetric_voltage,
+        eidors_electrode_rhs=nonsymmetric_voltage,
+    )
+    assert result["reference_relative_l2"] == 0.0
+    assert result["vs_eidors_standard_relative_l2"] == 0.0
+
+
+def test_v806_final_accuracy_payload_rejects_performance_fields() -> None:
+    _accuracy_only_guard({"scope": "accuracy only", "error": 1.0e-12})
+    with pytest.raises(ValueError, match="forbidden field"):
+        _accuracy_only_guard({"nested": [{"runtime_seconds": 0.5}]})
 
 
 def test_v683_multifem_derivation_contains_equivalence_and_energy_proof() -> None:
