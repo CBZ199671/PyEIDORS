@@ -65,6 +65,7 @@ _SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v3"
 _SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
 _SINGLE_STEP_CACHED_ALGORITHM_VERSION = "eidors_noser_single_step_v5"
 _ONE_STEP_RM_SIGNATURE_SCHEMA_VERSION = "one_step_rm_signature_schema_v2"
+_RM_PARAMETER_MESH_ORDER = "lexicographic-node-topology-v1"
 _ONE_STEP_RM_JACOBIAN_BUILD_CONVENTION = "dense_eidors_adapter_jacobian_v3"
 _ONE_STEP_RM_PRIOR_MATH_CONVENTION = "singular_graph_prior_param_form_hp2_rtr_v5"
 _ONE_STEP_RM_ALGORITHM_VERSION = "one_step_rm_auto_build_dense_jacobian_v7"
@@ -257,6 +258,64 @@ def _display_cell_connectivity_array(values: Any) -> np.ndarray:
     if np.issubdtype(cells.dtype, np.integer) and cells.dtype == np.dtype(np.int32):
         return cells
     return np.asarray(cells, dtype=np.int32)
+
+
+def _canonicalize_rm_parameter_mesh(
+    node_coords: Any,
+    cell_connectivity: Any,
+    jacobian: Any,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Canonicalize equivalent FEM permutations with matching Jacobian columns."""
+
+    nodes = _display_node_coords_array(node_coords)
+    cells = _display_cell_connectivity_array(cell_connectivity)
+    matrix = np.asarray(jacobian)
+    if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] < 2:
+        raise ValueError(
+            f"RM mesh requires non-empty node coordinates, got {nodes.shape}."
+        )
+    if not all_finite_values(nodes):
+        raise ValueError("RM mesh node coordinates must be finite.")
+    if cells.ndim != 2 or cells.shape[0] == 0 or cells.shape[1] < 2:
+        raise ValueError(
+            f"RM mesh requires non-empty cell connectivity, got {cells.shape}."
+        )
+    if matrix.ndim != 2 or matrix.shape[1] not in {
+        cells.shape[0],
+        nodes.shape[0],
+    }:
+        raise ValueError(
+            "RM Jacobian parameter count must equal the mesh cell or node count: "
+            f"{matrix.shape} vs {cells.shape}."
+        )
+    if np.any(cells < 0) or np.any(cells >= nodes.shape[0]):
+        raise ValueError("RM mesh cell connectivity contains an invalid node index.")
+
+    node_order = np.lexsort(
+        tuple(nodes[:, axis] for axis in range(nodes.shape[1] - 1, -1, -1))
+    )
+    canonical_nodes = np.ascontiguousarray(nodes[node_order])
+    if np.any(np.all(canonical_nodes[1:] == canonical_nodes[:-1], axis=1)):
+        raise ValueError("RM mesh contains duplicate node coordinates.")
+    old_to_canonical = np.empty(node_order.size, dtype=np.int64)
+    old_to_canonical[node_order] = np.arange(node_order.size, dtype=np.int64)
+
+    canonical_topology = np.sort(old_to_canonical[cells], axis=1)
+    cell_order = np.lexsort(
+        tuple(
+            canonical_topology[:, axis]
+            for axis in range(canonical_topology.shape[1] - 1, -1, -1)
+        )
+    )
+    canonical_cells = np.ascontiguousarray(
+        canonical_topology[cell_order],
+        dtype=np.int32,
+    )
+    if np.any(np.all(canonical_cells[1:] == canonical_cells[:-1], axis=1)):
+        raise ValueError("RM mesh contains duplicate cells.")
+    parameter_order = cell_order if matrix.shape[1] == cells.shape[0] else node_order
+    canonical_jacobian = np.ascontiguousarray(matrix[:, parameter_order])
+    return canonical_nodes, canonical_cells, canonical_jacobian
 
 
 def _triangulate_pseudo3d_cells(
@@ -3136,6 +3195,7 @@ def _planned_one_step_rm_signature(
             ),
             "rm_algorithm_version": str(meta.get("one_step_rm_algorithm_version", "")),
             "rm_content_contract": str(meta.get("one_step_rm_content_contract", "")),
+            "rm_parameter_mesh_order": _RM_PARAMETER_MESH_ORDER,
             "rm_dtype": rm_dtype_name,
             "noser_exponent": 0.5 if regularization_type == "noser" else None,
             "prior_operator": {
@@ -3261,6 +3321,11 @@ def _ensure_auto_built_one_step_rm_artifact(
     cell_connectivity = _display_cell_connectivity_array(
         ctx["display_cell_connectivity"]
     )
+    node_coords, cell_connectivity, jacobian = _canonicalize_rm_parameter_mesh(
+        node_coords,
+        cell_connectivity,
+        jacobian,
+    )
     regularization = None
     graph_weight = (
         str(runtime.meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
@@ -3381,6 +3446,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         "rm_output_display_mode": str(
             runtime.meta.get("rm_output_display_mode", "absolute_sigma")
         ),
+        "rm_parameter_mesh_order": _RM_PARAMETER_MESH_ORDER,
         "lambda_eff": float(runtime.lam),
         "hp": hp,
         "hp_squared": hp * hp,

@@ -1132,6 +1132,10 @@ def test_one_step_rm_signature_rejects_stale_normalized_jacobian_semantics() -> 
         == rc._ONE_STEP_RM_CONTENT_CONTRACT
     )
     assert (
+        current_payload["hyperparameters"]["rm_parameter_mesh_order"]
+        == rc._RM_PARAMETER_MESH_ORDER
+    )
+    assert (
         current_payload["hyperparameters"]["rm_jacobian_source_cache_scope"]
         == "process"
     )
@@ -1141,6 +1145,74 @@ def test_one_step_rm_signature_rejects_stale_normalized_jacobian_semantics() -> 
     )
     assert stale_payload["hyperparameters"]["rm_jacobian_source_cache_scope"] == "both"
     assert stale_payload["difference_mode"] == "normalized"
+
+
+def test_rm_parameter_mesh_order_is_canonical_across_equivalent_permutations() -> None:
+    nodes_a = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells_a = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+    jacobian_a = np.array(
+        [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]],
+        dtype=float,
+    )
+
+    # Same exact geometry with both node and element indices permuted.
+    node_new_to_old = np.array([2, 0, 3, 1], dtype=np.int64)
+    old_to_new = np.empty_like(node_new_to_old)
+    old_to_new[node_new_to_old] = np.arange(node_new_to_old.size)
+    cell_new_to_old = np.array([1, 0], dtype=np.int64)
+    nodes_b = nodes_a[node_new_to_old]
+    cells_b = old_to_new[cells_a[cell_new_to_old]].astype(np.int32)
+    jacobian_b = jacobian_a[:, cell_new_to_old]
+
+    canonical_a = rc._canonicalize_rm_parameter_mesh(
+        nodes_a,
+        cells_a,
+        jacobian_a,
+    )
+    canonical_b = rc._canonicalize_rm_parameter_mesh(
+        nodes_b,
+        cells_b,
+        jacobian_b,
+    )
+
+    for left, right in zip(canonical_a, canonical_b, strict=True):
+        np.testing.assert_array_equal(left, right)
+
+
+def test_rm_nodal_parameter_order_is_canonical_across_mesh_permutations() -> None:
+    nodes_a = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        dtype=float,
+    )
+    cells_a = np.array([[0, 1, 2, 3]], dtype=np.int32)
+    jacobian_a = np.array(
+        [[10.0, 20.0, 30.0, 40.0], [50.0, 60.0, 70.0, 80.0]],
+        dtype=float,
+    )
+
+    node_new_to_old = np.array([2, 0, 3, 1], dtype=np.int64)
+    old_to_new = np.empty_like(node_new_to_old)
+    old_to_new[node_new_to_old] = np.arange(node_new_to_old.size)
+    nodes_b = nodes_a[node_new_to_old]
+    cells_b = old_to_new[cells_a].astype(np.int32)
+    jacobian_b = jacobian_a[:, node_new_to_old]
+
+    canonical_a = rc._canonicalize_rm_parameter_mesh(
+        nodes_a,
+        cells_a,
+        jacobian_a,
+    )
+    canonical_b = rc._canonicalize_rm_parameter_mesh(
+        nodes_b,
+        cells_b,
+        jacobian_b,
+    )
+
+    for left, right in zip(canonical_a, canonical_b, strict=True):
+        np.testing.assert_array_equal(left, right)
 
 
 def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
